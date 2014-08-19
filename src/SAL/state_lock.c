@@ -135,6 +135,7 @@ state_status_t state_lock_init(void)
 	unknown_owner.so_owner_val = "ganesha_unknown_owner";
 	unknown_owner.so_type = STATE_LOCK_OWNER_UNKNOWN;
 	unknown_owner.so_refcount = 1;
+	unknown_owner.last_close_time = 0;
 	unknown_owner.so_owner_len = strlen(unknown_owner.so_owner_val);
 
 	glist_init(&unknown_owner.so_lock_list);

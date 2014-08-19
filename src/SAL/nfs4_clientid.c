@@ -566,6 +566,7 @@ nfs_client_id_t *create_client_id(clientid4 clientid,
 	owner->so_owner.so_nfs4_owner.so_resp.resop = NFS4_OP_ILLEGAL;
 	owner->so_owner.so_nfs4_owner.so_args.argop = NFS4_OP_ILLEGAL;
 	owner->so_refcount = 1;
+	owner->last_close_time = 0;
 
 	/* Init the lists for the clientid_owner */
 	glist_init(&owner->so_lock_list);
@@ -873,7 +874,6 @@ bool nfs_client_id_expire(nfs_client_id_t *clientid)
 			"Could not remove expired clientid %" PRIx64
 			" error=%s", clientid->cid_clientid,
 			hash_table_err_to_str(rc));
-		assert(rc == HASHTABLE_SUCCESS);
 	}
 
 	/* traverse the client's lock owners, and release all locks */

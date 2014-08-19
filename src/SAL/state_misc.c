@@ -987,6 +987,14 @@ void dec_state_owner_ref(state_owner_t *owner)
 		return;
 	}
 
+	if (owner->so_type == STATE_OPEN_OWNER_NFSV4) {
+		atomic_store_int64_t(&owner->last_close_time, time(NULL));
+		LogFullDebug(COMPONENT_STATE,
+			     "Cached open owner {%s}",
+			     str);
+		return;
+	}
+
 	ht_owner = get_state_owner_hash_table(owner);
 
 	if (ht_owner == NULL) {
@@ -1110,6 +1118,7 @@ state_owner_t *get_state_owner(care_t care, state_owner_t *key,
 		 * a race occurs.
 		 */
 		inc_state_owner_ref(owner);
+		owner->last_close_time = 0;
 
 		hashtable_releaselatched(ht_owner, &latch);
 

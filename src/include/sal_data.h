@@ -585,7 +585,7 @@ struct state_owner_t {
 	struct glist_head so_all_owners; /**< Global list of all state owners */
 #endif				/* _DEBUG_MEMLEAKS */
 	pthread_mutex_t so_mutex;	/*< Mutex on this owner */
-	int so_refcount;	/*< Reference count for lifecyce management */
+	int32_t so_refcount;	/*< Reference count for lifecyce management */
 	int so_owner_len;	/*< Length of owner name */
 	char *so_owner_val;	/*< Owner name */
 	union {
@@ -596,6 +596,7 @@ struct state_owner_t {
 		state_9p_owner_t so_9p_owner;	/*< 9P lock owners */
 #endif
 	} so_owner;
+	time_t last_close_time;
 };
 
 /* Test if the lock owner type is 9P */

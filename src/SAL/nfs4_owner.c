@@ -427,6 +427,7 @@ state_owner_t *create_nfs4_owner(state_nfs4_owner_name_t *name,
 		if (owner->so_owner.so_nfs4_owner.so_related_owner == NULL) {
 			/* Attach related owner to owner now that we know it. */
 			inc_state_owner_ref(related_owner);
+			owner->last_close_time = 0;
 			owner->so_owner.so_nfs4_owner.so_related_owner =
 			    related_owner;
 		} else if (owner->so_owner.so_nfs4_owner.so_related_owner !=

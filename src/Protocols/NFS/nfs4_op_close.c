@@ -156,33 +156,14 @@ int nfs4_op_close(struct nfs_argop4 *op, compound_data_t *data,
 					data->minorversion == 0 ?
 					    STATEID_SPECIAL_FOR_CLOSE_40 :
 					    STATEID_SPECIAL_FOR_CLOSE_41,
-					0,
-					FALSE, /* don't check owner seqid */
+					arg_CLOSE4->seqid,
+					(data->minorversion == 0),
 					close_tag);
 
-	if (nfs_status != NFS4_OK) {
+	if ((nfs_status != NFS4_OK) &&
+	    (nfs_status != NFS4ERR_REPLAY)) {
 		res_CLOSE4->status = nfs_status;
 		LogDebug(COMPONENT_STATE, "CLOSE failed nfs4_Check_Stateid");
-		return res_CLOSE4->status;
-	}
-
-	if (state_found == NULL) {
-		/* Assume this is a replayed close */
-		res_CLOSE4->status = NFS4_OK;
-		memcpy(res_CLOSE4->CLOSE4res_u.open_stateid.other,
-		       arg_CLOSE4->open_stateid.other,
-		       OTHERSIZE);
-
-		res_CLOSE4->CLOSE4res_u.open_stateid.seqid =
-		    arg_CLOSE4->open_stateid.seqid + 1;
-
-		if (res_CLOSE4->CLOSE4res_u.open_stateid.seqid == 0)
-			res_CLOSE4->CLOSE4res_u.open_stateid.seqid = 1;
-
-		LogDebug(COMPONENT_STATE,
-			 "CLOSE failed nfs4_Check_Stateid must have already been closed."
-			 " But treating it as replayed close and returning NFS4_OK");
-
 		return res_CLOSE4->status;
 	}
 
@@ -263,11 +244,12 @@ int nfs4_op_close(struct nfs_argop4 *op, compound_data_t *data,
 		}
 	}
 
-	/* File is closed, release the corresponding state */
-	state_del_locked(state_found, data->current_entry);
-
 	/* Poison the current stateid */
 	data->current_stateid_valid = false;
+
+	/* File is closed, mark the corresponding state as CLOSE_PENDING */
+	state_found->state_type = STATE_TYPE_CLOSE_PENDING;
+	atomic_store_int64_t(&state_found->last_close_time, time(NULL));
 
 	if (data->minorversion > 0)
 		cleanup_layouts(data);
@@ -278,8 +260,13 @@ int nfs4_op_close(struct nfs_argop4 *op, compound_data_t *data,
 		    &open_owner->so_owner.so_nfs4_owner.so_clientid;
 	}
 
-	/* Close the file in FSAL through the cache inode */
+	/* Close the file in FSAL through the cache inode.
+	 * Also, since we do not cleanup the state_found yet,
+	 * pass in the "CACHE_INODE_FLAG_NOT_PINNED" flag to
+	 * really close the file succesfully.
+	 */
 	cache_status = cache_inode_close(data->current_entry,
+					 CACHE_INODE_FLAG_NOT_PINNED |
 					 CACHE_INODE_FLAG_REALLYCLOSE);
 
 	if (cache_status != CACHE_INODE_SUCCESS) {

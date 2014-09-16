@@ -205,6 +205,7 @@ state_status_t state_add_impl(cache_entry_t *entry, state_type_t state_type,
 	pnew_state->state_seqid = 0;	/* will be incremented to 1 later */
 	pnew_state->state_entry = entry;
 	pnew_state->state_owner = owner_input;
+	pnew_state->last_close_time = 0;
 
 	if (refer)
 		pnew_state->state_refer = *refer;

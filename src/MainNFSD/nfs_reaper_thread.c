@@ -41,6 +41,68 @@ unsigned int reaper_delay = REAPER_DELAY;
 
 static struct fridgethr *reaper_fridge;
 
+static int reap_expired_state_ids(hash_table_t *ht_reap)
+{
+	struct rbt_head *head_rbt;
+	struct hash_data *addr = NULL;
+	uint32_t i;
+	struct rbt_node *pn;
+	int count = 0;
+	state_t *pstate;
+	time_t t;
+
+	/* For each bucket of the requested hashtable */
+	for (i = 0; i < ht_reap->parameter.index_size; i++) {
+		head_rbt = &ht_reap->partitions[i].rbt;
+
+ restart:
+		/* acquire mutex */
+		PTHREAD_RWLOCK_wrlock(&ht_reap->partitions[i].lock);
+
+		/* go through all entries in the red-black-tree */
+		RBT_LOOP(head_rbt, pn) {
+			addr = RBT_OPAQ(pn);
+
+			pstate = addr->val.addr;
+			count++;
+
+			if (pstate->state_type != STATE_TYPE_CLOSE_PENDING) {
+				RBT_INCREMENT(pn);
+				continue;
+			}
+			cache_entry_t *entry = pstate->state_entry;
+			PTHREAD_RWLOCK_wrlock(&entry->state_lock);
+			t = time(NULL);
+
+			/* Cleanup the CLOSE_PENDING stateids only if its
+			 * last_close_time exceeds the lease_lifetime
+			 */
+			if (pstate->last_close_time &&
+			     (pstate->last_close_time +
+			      nfs_param.nfsv4_param.lease_lifetime > t)){
+				LogFullDebug(COMPONENT_STATE,
+					     "Did not release State %p",
+					     pstate);
+				PTHREAD_RWLOCK_unlock(&entry->state_lock);
+
+			} else {
+				LogFullDebug(COMPONENT_STATE, "Free State {%p}",
+					     pstate);
+				PTHREAD_RWLOCK_unlock(
+					     &ht_reap->partitions[i].lock);
+				state_del(pstate, true);
+				PTHREAD_RWLOCK_unlock(&entry->state_lock);
+				goto restart;
+			}
+
+			RBT_INCREMENT(pn);
+		}
+		PTHREAD_RWLOCK_unlock(&ht_reap->partitions[i].lock);
+	}
+
+	return count;
+}
+
 static int reap_hash_table(hash_table_t *ht_reap)
 {
 	struct rbt_head *head_rbt;
@@ -161,6 +223,8 @@ static void reaper_run(struct fridgethr_context *ctx)
 	rst->count =
 	    (reap_hash_table(ht_confirmed_client_id) +
 	     reap_hash_table(ht_unconfirmed_client_id));
+
+	rst->count += reap_expired_state_ids(ht_state_id);
 }
 
 int reaper_init(void)

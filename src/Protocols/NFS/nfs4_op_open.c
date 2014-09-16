@@ -202,14 +202,20 @@ static nfsstat4 open4_do_open(struct nfs_argop4 *op, compound_data_t *data,
 		 * compare pointers.
 		 */
 		if (state_iterate->state_owner == owner) {
-			/* We'll be re-using the found state */
-			file_state = state_iterate;
-			*new_state = false;
+			/* Check if its CLOSE_PENDING STATE */
+			if (state_iterate->state_type ==
+			    STATE_TYPE_CLOSE_PENDING) {
+				state_del(state_iterate, false);
+			} else {
+				/* We'll be re-using the found state */
+				file_state = state_iterate;
+				*new_state = false;
 
-			/* If we are re-using stateid, then release
-			 * extra reference to open owner
-			 */
-			break;
+				/* If we are re-using stateid, then release
+				 * extra reference to open owner
+				 */
+				break;
+			}
 		}
 	}
 

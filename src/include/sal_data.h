@@ -254,7 +254,8 @@ typedef enum state_type_t {
 	STATE_TYPE_SHARE = 1,
 	STATE_TYPE_DELEG = 2,
 	STATE_TYPE_LOCK = 4,
-	STATE_TYPE_LAYOUT = 5
+	STATE_TYPE_LAYOUT = 5,
+	STATE_TYPE_CLOSE_PENDING = 6
 } state_type_t;
 
 /**
@@ -365,6 +366,7 @@ struct state_t {
 	struct state_refer state_refer;	/*< For NFSv4.1, track the
 					   call that created a
 					   state. */
+	time_t last_close_time;
 };
 
 /* Macros to compare and copy state_t to a struct stateid4 */
@@ -576,7 +578,7 @@ struct state_owner_t {
 	struct glist_head so_all_owners; /**< Global list of all state owners */
 #endif				/* _DEBUG_MEMLEAKS */
 	pthread_mutex_t so_mutex;	/*< Mutex on this owner */
-	int so_refcount;	/*< Reference count for lifecyce management */
+	int32_t so_refcount;	/*< Reference count for lifecyce management */
 	int so_owner_len;	/*< Length of owner name */
 	char *so_owner_val;	/*< Owner name */
 	union {

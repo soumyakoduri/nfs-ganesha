@@ -875,7 +875,6 @@ bool nfs_client_id_expire(nfs_client_id_t *clientid)
 			"Could not remove expired clientid %" PRIx64
 			" error=%s", clientid->cid_clientid,
 			hash_table_err_to_str(rc));
-		assert(rc == HASHTABLE_SUCCESS);
 	}
 
 	/* traverse the client's lock owners, and release all locks */

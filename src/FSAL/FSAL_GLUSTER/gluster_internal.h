@@ -356,6 +356,7 @@ struct glusterfs_export {
 	gid_t savedgid;
 	struct fsal_export export;
 	bool acl_enable;
+	pthread_t up_thread; /* upcall thread */
 };
 
 struct glusterfs_handle {
@@ -366,6 +367,47 @@ struct glusterfs_handle {
 	fsal_openflags_t openflags;
 	struct fsal_obj_handle handle;	/* public FSAL handle */
 };
+
+struct callback_arg
+{
+//    int interface_version;
+//    int mountdirfd;
+    glfs_t *gl_fs;
+    int *reason;
+    struct glfs_object *glhandle;
+//    struct glock *fl;
+    int *flags;
+    struct stat *buf;
+  //  struct pnfs_deviceid *dev_id;
+    uint32_t *expire_attr;
+};
+
+#ifdef GLFS_UPCALL 
+/* Defines for the flags in callback_arg, keep up to date with CXIUP_xxx */
+#define UP_NLINK        0x00000001   /* update nlink */
+#define UP_MODE         0x00000002   /* update mode and ctime */
+#define UP_OWN          0x00000004   /* update mode,uid,gid and ctime */
+#define UP_SIZE         0x00000008   /* update fsize */
+#define UP_SIZE_BIG     0x00000010   /* update fsize if bigger */
+#define UP_TIMES        0x00000020   /* update all times */
+#define UP_ATIME        0x00000040   /* update atime only */
+#define UP_PERM         0x00000080   /* update fields needed for permission checking*/
+#define UP_RENAME       0x00000100   /* this is a rename op */
+#define UP_DESTROY_FLAG 0x00000200   /* clear destroyIfDelInode flag */
+#define UP_GANESHA      0x00000400   /* this is a ganesha op */
+
+/* reason list for reason in callback_arg */
+#define INODE_INVALIDATE        1
+#define INODE_UPDATE            2
+#define INODE_LOCK_GRANTED      3
+#define INODE_LOCK_AGAIN        4
+#define THREAD_STOP             5
+#define THREAD_PAUSE            6
+#define BREAK_DELEGATION        7
+#define LAYOUT_FILE_RECALL      8
+#define LAYOUT_RECALL_ANY       9
+#define LAYOUT_NOTIFY_DEVICEID 10
+#endif
 
 /* A POSIX ACL Entry */
 typedef struct glusterfs_ace_v1 {
@@ -483,5 +525,6 @@ fsal_status_t mode_bits_to_acl(struct glfs *fs,
 			       struct attrlist *attrs, int *attrs_valid,
 			       glusterfs_fsal_xstat_t *buffxstat,
 			       bool is_dir);
+void *GLUSTERFSAL_UP_Thread(void *Arg);
 
 #endif				/* GLUSTER_INTERNAL */

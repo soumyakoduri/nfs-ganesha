@@ -97,7 +97,7 @@ void *GLUSTERFSAL_UP_Thread(void *Arg)
                 expire_time_attr = cache_param.expire_time_attr; //for now..have to b changed
 
 
-		rc = glfs_h_upcall(&callback);
+		rc = glfs_h_upcall(glfsexport->gl_fs, &callback);
 		errsv = errno;
 
 		if (rc != 0) {

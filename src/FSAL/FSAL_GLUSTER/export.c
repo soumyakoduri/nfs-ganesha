@@ -551,6 +551,7 @@ fsal_status_t glusterfs_create_export(struct fsal_module *fsal_hdl,
 {
 	struct config_error_type err_type;
 	int rc;
+	int retval;
 	fsal_status_t status = { ERR_FSAL_NO_ERROR, 0 };
 	struct glusterfs_export *glfsexport = NULL;
 	glfs_t *fs = NULL;
@@ -596,7 +597,6 @@ fsal_status_t glusterfs_create_export(struct fsal_module *fsal_hdl,
 	}
 
 	export_ops_init(&glfsexport->export.exp_ops);
-	glfsexport->export.up_ops = up_ops;
 
 	fs = glfs_new(params.glvolname);
 	if (!fs) {
@@ -653,6 +653,42 @@ fsal_status_t glusterfs_create_export(struct fsal_module *fsal_hdl,
 		  EXPORT_OPTION_DISABLE_ACL) ? 0 : 1);
 
 	op_ctx->fsal_export = &glfsexport->export;
+
+	if (up_ops) {
+		pthread_attr_t up_thr;
+
+		memset(&up_thr, 0, sizeof(up_thr));
+
+		/* Initialization of thread attributes from nfs_init.c */
+		if (pthread_attr_init(&up_thr) != 0)
+			LogCrit(COMPONENT_THREAD,
+				"can't init pthread's attributes");
+
+		if (pthread_attr_setscope(&up_thr, PTHREAD_SCOPE_SYSTEM) != 0)
+			LogCrit(COMPONENT_THREAD, "can't set pthread's scope");
+
+		if (pthread_attr_setdetachstate(&up_thr,
+						PTHREAD_CREATE_JOINABLE) != 0)
+			LogCrit(COMPONENT_THREAD,
+				"can't set pthread's join state");
+
+		if (pthread_attr_setstacksize(&up_thr, 2116488) != 0)
+			LogCrit(COMPONENT_THREAD,
+				"can't set pthread's stack size");
+
+		glfsexport->export.up_ops = up_ops;
+
+		retval = pthread_create(&glfsexport->up_thread,
+					&up_thr,
+					GLUSTERFSAL_UP_Thread,
+					glfsexport);
+		if (retval !=0 ) {
+			LogCrit(COMPONENT_FSAL,
+				"Unable to create GLUSTERFSAL_UP_Thread. Export: %s",
+				op_ctx->export->fullpath);
+			goto out;
+		}
+	}
 
  out:
 	if (params.glvolname)

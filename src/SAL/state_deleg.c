@@ -339,6 +339,25 @@ bool should_we_grant_deleg(cache_entry_t *entry, nfs_client_id_t *client,
 	assert(open_state->state_type == STATE_TYPE_SHARE);
 
 	*prerecall = false;
+
+    if (!nfs_param.nfsv4_param.allow_delegations) {
+        LogDebug(COMPONENT_STATE, "should_we_grant_deleg() : In 1");
+    }
+/*    if (!(op_ctx->fsal_export->ops->fs_supports(
+                    op_ctx->fsal_export,
+                    fso_delegations_r))) {
+        LogDebug(COMPONENT_STATE, "In should_we_grant_deleg() : In 2" );
+    }*/
+    if (!(op_ctx->export_perms->options & EXPORT_OPTION_DELEGATIONS)) {
+        LogDebug(COMPONENT_STATE, "In should_we_grant_deleg() : In 3" );
+    }
+    if (!owner->so_owner.so_nfs4_owner.so_confirmed && claim == CLAIM_NULL) {
+        LogDebug(COMPONENT_STATE, "In should_we_grant_deleg() : In 4");
+    }
+    if (claim == CLAIM_DELEGATE_CUR) {
+        LogDebug(COMPONENT_STATE, "In should_we_grant_deleg() : In 5");
+    }
+
 	if (!nfs_param.nfsv4_param.allow_delegations
 	    || !op_ctx->fsal_export->exp_ops.fs_supports(
 					op_ctx->fsal_export,
@@ -347,7 +366,10 @@ bool should_we_grant_deleg(cache_entry_t *entry, nfs_client_id_t *client,
 	    || (!owner->so_owner.so_nfs4_owner.so_confirmed
 		&& claim == CLAIM_NULL)
 	    || claim == CLAIM_DELEGATE_CUR)
+    {
+        LogDebug(COMPONENT_STATE, "1 : returning FALSE, claim = %d", claim);
 		return false;
+    }
 
 	/* set the pre-recall flag for reclaims if the server does not want the
 	 * delegation to remain in force */

@@ -1172,6 +1172,182 @@ static fsal_status_t commit(struct fsal_obj_handle *obj_hdl,	/* sync */
  * excessive.
  */
 
+/* new lock_op function definition begins */
+
+static fsal_status_t glfs_fsal_lock_op( struct fsal_obj_handle *obj_hdl,
+		                        void              *p_owner,
+		                        fsal_lock_op_t     lock_op,
+		                        fsal_lock_param_t *request_lock,
+		                        fsal_lock_param_t *conflicting_lock )
+{
+	int rc = 0, rc2 = 0;
+        int errno_ret1 = 0, errno_ret2 = 0;
+	struct glock  glock_args;
+        struct glfs_lock_args   glfs_lockarg;
+	fsal_status_t status = { ERR_FSAL_NO_ERROR, 0 };
+	struct glusterfs_handle *objhandle =
+	    container_of(obj_hdl, struct glusterfs_handle, handle);
+	//struct flock flock;
+	int cmd;
+	//int saverrno = 0;
+#ifdef GLTIMING
+	struct timespec s_time, e_time;
+
+	now(&s_time);
+#endif
+
+    LogWarn( COMPONENT_FSAL,
+             "In glfs_fsal_lock_op(), lock_op = %d", (int)lock_op);
+
+	GLFS_ASSERT_NON_NULL( obj_hdl );
+	GLFS_ASSERT_NON_NULL( request_lock );
+
+	if (( conflicting_lock == NULL ) && ( lock_op == FSAL_OP_LOCKT )) {
+        LogDebug( COMPONENT_FSAL,
+                  "Conflicting lock argument cannot be NULL for LOCKT request" );
+		return fsalstat(ERR_FSAL_SERVERFAULT, 0);
+	}
+
+	if ( objhandle->openflags == FSAL_O_CLOSED ) {
+		LogDebug(COMPONENT_FSAL,
+			 "ERROR: Attempting to lock with no file descriptor open" );
+		status.major = ERR_FSAL_FAULT;
+		goto out;
+	}
+
+        switch (lock_op) {
+        case FSAL_OP_LOCKT:
+                cmd = F_GETLK;
+                break;
+        case FSAL_OP_LOCK:
+        case FSAL_OP_UNLOCK:
+                cmd = F_SETLK;
+                break;
+        case FSAL_OP_LOCKB:
+                cmd = F_SETLKW;
+                break;
+        case FSAL_OP_CANCEL:
+                cmd = GLFS_F_CANCELLK;
+                break;
+        default:
+                LogDebug( COMPONENT_FSAL,
+                          "ERROR : Lock op requested was not TEST, SET or GET." );
+                return fsalstat( ERR_FSAL_NOTSUPP, 0 );
+        }
+
+        if (request_lock->lock_type == FSAL_LOCK_R) {
+                glock_args.flock.l_type = F_RDLCK;
+        } else if (request_lock->lock_type == FSAL_LOCK_W) {
+                glock_args.flock.l_type = F_WRLCK;
+        } else {
+                LogDebug( COMPONENT_FSAL,
+                          "ERROR : The requested lock type was not R or W" );
+                return fsalstat( ERR_FSAL_NOTSUPP, 0 );
+        }
+
+        if ( lock_op == FSAL_OP_UNLOCK ) {
+                glock_args.flock.l_type = F_UNLCK;
+        }
+
+        glock_args.flock.l_len      = request_lock->lock_length;
+        glock_args.flock.l_start    = request_lock->lock_start;
+        glock_args.flock.l_whence   = SEEK_SET;
+        glock_args.lock_owner       = p_owner;
+
+        /* Reclaim of locks will be not be supported by GlusterFS.
+         * Incase of Ganesha server reboot/failover, GlusterFS anyways
+         * cleans up those locks after timeout.
+         */
+        //glfs_lockarg.reclaim    = request_lock->lock_reclaim;
+
+        glfs_lockarg.lock = &glock_args;
+
+        errno = 0;
+
+        if (request_lock->lock_sle_type == FSAL_LEASE_LOCK) {
+                glfs_lockarg.lock_type = OP_LK_LEASE;
+                LogDebug( COMPONENT_FSAL,
+                          "INFO : Delegation requested via FSAL_LEASE_LOCK" );
+        } else {
+                glfs_lockarg.lock_type = OP_LK_BYTE_RANGE;
+                LogDebug( COMPONENT_FSAL,
+                          "INFO : Delegation requested via FSAL_LEASE_LOCK" );
+        }
+
+        rc = glfs_common_lock(objhandle->glfd, cmd,  &glfs_lockarg );
+
+        if ( rc ) {
+                errno_ret1 = errno;
+
+                if (( conflicting_lock != NULL ) &&
+                    (( lock_op == FSAL_OP_LOCK ) || ( lock_op == FSAL_OP_LOCKB )) &&
+                    (( errno == EACCES ) || ( errno == EAGAIN ))) {
+                        /* 
+                         * request for a non-blocking or a blocking lock 
+                         * since prev set lock request seems to have failed, make
+                         * an attempt to get current lock owner details
+                         */
+                        LogFullDebug(COMPONENT_FSAL,
+                                     "glfs lock op failed errno = %d (%s), trying to retrieve conflicting lock info",
+                                     errno_ret1, strerror( errno_ret1 ));
+
+                        cmd = F_GETLK;
+
+                        rc2 = glfs_common_lock(objhandle->glfd, cmd, &glfs_lockarg );
+                        errno_ret2 = errno;
+
+                        if ( rc2 ) {
+                                LogCrit( COMPONENT_FSAL,
+                                         "After failing set lock request, attempt to get current \
+                                         lock owner details failed too : errno = %d (%s)",
+                                         errno_ret2, strerror( errno_ret2 ));
+ 
+                                if ( errno_ret2 == EUNATCH )
+                                        LogFatal( COMPONENT_FSAL,
+                                                "GlusterFS returned EUNATCH" );
+                        } else {
+                                conflicting_lock->lock_length = glock_args.flock.l_len;
+                                conflicting_lock->lock_start = glock_args.flock.l_start;
+                                conflicting_lock->lock_type = glock_args.flock.l_type;
+
+                                status = gluster2fsal_error( errno_ret1 );
+                                goto out;
+                        }
+                } else {
+                         LogFullDebug( COMPONENT_FSAL,
+                                       "GlusterFS lock op failed. error : %d %d (%s)",
+                                       rc, errno_ret1, strerror( errno_ret1 ));
+
+                         if (errno_ret1 == EUNATCH ) {
+                                LogFatal( COMPONENT_FSAL, "GlusterFS returned EUNATCH on lock op" );
+                         }
+                         status = gluster2fsal_error( errno_ret1 );
+                         goto out;
+                }
+        }  /* End of if ( rc ) */
+
+        if ( conflicting_lock != NULL ) {
+                if (( lock_op == FSAL_OP_LOCKT ) &&
+                    ( glock_args.flock.l_type != F_UNLCK )) {
+                        conflicting_lock->lock_length = glock_args.flock.l_len;
+                        conflicting_lock->lock_start = glock_args.flock.l_start;
+                        conflicting_lock->lock_type = glock_args.flock.l_type;
+                } else {
+                        conflicting_lock->lock_length = 0;
+                        conflicting_lock->lock_start= 0;
+                        conflicting_lock->lock_type = FSAL_NO_LOCK;
+                }
+        }
+
+        return fsalstat( ERR_FSAL_NO_ERROR, 0 );
+
+out:
+        return status;
+}
+
+/* new lock_op function definition ends */
+
+/*
 static fsal_status_t lock_op(struct fsal_obj_handle *obj_hdl,
 			     void *p_owner,
 			     fsal_lock_op_t lock_op,
@@ -1220,7 +1396,6 @@ static fsal_status_t lock_op(struct fsal_obj_handle *obj_hdl,
 		goto out;
 	}
 
-	/* TODO: Override R/W and just provide U? */
 	if (lock_op == FSAL_OP_UNLOCK)
 		flock.l_type = F_UNLCK;
 
@@ -1231,7 +1406,6 @@ static fsal_status_t lock_op(struct fsal_obj_handle *obj_hdl,
 	rc = glfs_posix_lock(objhandle->glfd, cmd, &flock);
 	if (rc != 0 && lock_op == FSAL_OP_LOCK
 	    && conflicting_lock && (errno == EACCES || errno == EAGAIN)) {
-		/* process conflicting lock */
 		saverrno = errno;
 		cmd = F_GETLK;
 		rc = glfs_posix_lock(objhandle->glfd, cmd, &flock);
@@ -1273,6 +1447,7 @@ static fsal_status_t lock_op(struct fsal_obj_handle *obj_hdl,
 #endif
 	return status;
 }
+*/
 
 /**
  * @brief Implements GLUSTER FSAL objectoperation share_op
@@ -1561,7 +1736,7 @@ void handle_ops_init(struct fsal_obj_ops *ops)
 	ops->read = file_read;
 	ops->write = file_write;
 	ops->commit = commit;
-	ops->lock_op = lock_op;
+	ops->lock_op = glfs_fsal_lock_op;
 	ops->close = file_close;
 	ops->lru_cleanup = lru_cleanup;
 	ops->handle_digest = handle_digest;

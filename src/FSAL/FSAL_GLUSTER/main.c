@@ -53,7 +53,7 @@ static struct fsal_staticfsinfo_t default_gluster_info = {
 	.link_support = true,
 	.symlink_support = true,
 	.lock_support = true,
-	.lock_support_owner = false,
+	.lock_support_owner = true,
 	.lock_support_async_block = false,
 	.named_attr = true,
 	.unique_handles = true,
@@ -66,6 +66,7 @@ static struct fsal_staticfsinfo_t default_gluster_info = {
 	.maxwrite = 0,
 	.umask = 0,
 	.auth_exportpath_xdev = false,
+        .delegations = FSAL_OPTION_FILE_DELEGATIONS,
 	.xattr_access_rights = 0400,	/* root=RW, owner=R */
 };
 

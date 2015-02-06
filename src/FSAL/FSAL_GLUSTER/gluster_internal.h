@@ -29,6 +29,7 @@
 #include "fsal_api.h"
 #include <glusterfs/api/glfs.h>
 #include <glusterfs/api/glfs-handles.h>
+#include <errno.h>
 
 #define GLUSTER_VOLNAME_KEY  "volume"
 #define GLUSTER_HOSTNAME_KEY "hostname"
@@ -40,6 +41,8 @@
 			goto out;				\
 		}						\
 	} while (0)
+
+#define GLFS_ASSERT_NON_NULL( x ) assert( x != NULL)
 
 /* defined the set of attributes supported with POSIX */
 #define GLUSTERFS_SUPPORTED_ATTRIBUTES (	 \
@@ -451,6 +454,8 @@ typedef struct glusterfs_posix_acl_header {
 	uint32_t version;
 	glusterfs_ace_v1_t ace_v1[];
 } glusterfs_posix_acl_t;
+
+#define GLFS_F_CANCELLK (1024 + 5)   /* Maps to Linux F_CANCELLK */
 
 #ifdef GLTIMING
 struct latency_data glfsal_latencies[LATENCY_SLOTS];

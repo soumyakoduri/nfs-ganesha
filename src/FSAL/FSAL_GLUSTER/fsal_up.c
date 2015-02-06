@@ -97,6 +97,7 @@ void *GLUSTERFSAL_UP_Thread(void *Arg)
                 }
 
 		rc = glfs_h_poll_upcall(glfsexport->gl_fs, &callback);
+//		rc = glfs_common_lock(NULL, -1 , NULL); //glfsexport->gl_fs, &callback);
 		errsv = errno;
 
 		if (rc != 0) {

@@ -409,6 +409,7 @@ static nfsstat4 open4_validate_claim(compound_data_t *data,
 		if (nfs_in_grace() || ((data->minorversion > 0)
 		    && !clientid->cid_cb.v41.cid_reclaim_complete))
 			status = NFS4ERR_GRACE;
+			LogFullDebug(COMPONENT_STATE, "open4_validate_claim : In CLAIM_NULL");
 		break;
 
 	case CLAIM_FH:
@@ -420,6 +421,7 @@ static nfsstat4 open4_validate_claim(compound_data_t *data,
 				fsal_grace = true;
 		if (!fsal_grace && nfs_in_grace())
 			status = NFS4ERR_GRACE;
+			LogFullDebug(COMPONENT_STATE, "open4_validate_claim : In CLAIM_FH");
 		break;
 
 	case CLAIM_DELEGATE_PREV:
@@ -431,18 +433,22 @@ static nfsstat4 open4_validate_claim(compound_data_t *data,
 		    || ((data->minorversion > 0)
 		    && clientid->cid_cb.v41.cid_reclaim_complete))
 			status = NFS4ERR_NO_GRACE;
+			LogFullDebug(COMPONENT_STATE, "open4_validate_claim : In CLAIM_PREVIOUS, CLAIM_DELEGATE_PREV");
 		break;
 
 	case CLAIM_DELEGATE_CUR:
+			LogFullDebug(COMPONENT_STATE, "open4_validate_claim : In CLAIM_DELEGATE_CUR");
 		break;
 
 	case CLAIM_DELEG_CUR_FH:
 	case CLAIM_DELEG_PREV_FH:
 		status = NFS4ERR_NOTSUPP;
+			LogFullDebug(COMPONENT_STATE, "open4_validate_claim : In CLAIM_DELEG_PREV_FH");
 		break;
 
 	default:
 		status = NFS4ERR_INVAL;
+			LogFullDebug(COMPONENT_STATE, "open4_validate_claim : Indefault, NFSERR_INVAL");
 	}
 
 	return status;
@@ -1005,6 +1011,7 @@ static void get_delegation(compound_data_t *data, OPEN4args *args,
 	/* Check if any prior OPENs conflict with granting a delegation */
 	if (state_open_deleg_conflict(data->current_entry, open_state))
 		return;
+    LogDebug(COMPONENT_STATE, "In get_delegation() ++++++++++++++++++++++++++++++++++++++++++++++ ");
 
 	/* Record the sequence info */
 	if (data->minorversion > 0) {
@@ -1115,6 +1122,8 @@ static void do_delegation(OPEN4args *arg_OPEN4, OPEN4res *res_OPEN4,
 	struct file_deleg_stats *fdeleg_stats =
 				&data->current_entry->object.file.fdeleg_stats;
 
+    LogDebug(COMPONENT_STATE, "In do_delegation ------------------------------------- ");
+
 	/* This will be updated later if we actually delegate */
 	resok->delegation.delegation_type = OPEN_DELEGATE_NONE;
 
@@ -1145,6 +1154,11 @@ static void do_delegation(OPEN4args *arg_OPEN4, OPEN4res *res_OPEN4,
 		LogDebug(COMPONENT_STATE, "Attempting to grant delegation");
 		get_delegation(data, arg_OPEN4, open_state, owner, clientid,
 			       resok, prerecall);
+/*	} else {
+        LogDebug(COMPONENT_STATE, "Not attempting to grant delegation --------------------------------- ");
+
+		resok->delegation.open_delegation4_u.
+			od_whynone.ond_why = WND4_NOT_WANTED;*/
 	}
 }
 

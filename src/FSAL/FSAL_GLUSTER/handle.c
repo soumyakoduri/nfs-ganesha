@@ -278,7 +278,7 @@ static fsal_status_t create(struct fsal_obj_handle *dir_hdl,
 	}
 
 	*handle = &objhandle->handle;
-	*attrib = objhandle->handle.attributes;
+	*attrib = objhandle->handle->attrs;
 
  out:
 	if (status.major != ERR_FSAL_NO_ERROR)
@@ -364,7 +364,7 @@ static fsal_status_t makedir(struct fsal_obj_handle *dir_hdl,
 	}
 
 	*handle = &objhandle->handle;
-	*attrib = objhandle->handle.attributes;
+	*attrib = objhandle->handle->attrs;
 
  out:
 	if (status.major != ERR_FSAL_NO_ERROR)
@@ -478,7 +478,7 @@ static fsal_status_t makenode(struct fsal_obj_handle *dir_hdl,
 	}
 
 	*handle = &objhandle->handle;
-	*attrib = objhandle->handle.attributes;
+	*attrib = objhandle->handle->attrs;
 
  out:
 	if (status.major != ERR_FSAL_NO_ERROR)
@@ -563,7 +563,7 @@ static fsal_status_t makesymlink(struct fsal_obj_handle *dir_hdl,
 	}
 
 	*handle = &objhandle->handle;
-	*attrib = objhandle->handle.attributes;
+	*attrib = objhandle->handle->attrs;
 
  out:
 	if (status.major != ERR_FSAL_NO_ERROR)
@@ -671,7 +671,7 @@ static fsal_status_t getattrs(struct fsal_obj_handle *obj_hdl)
 		goto out;
 	}
 
-	fsalattr = &objhandle->handle.attributes;
+	fsalattr = &objhandle->handle->attrs;
 	stat2fsal_attributes(&buffxstat.buffstat, fsalattr);
 
 	status = glusterfs_get_acl(glfs_export, objhandle->glhandle,

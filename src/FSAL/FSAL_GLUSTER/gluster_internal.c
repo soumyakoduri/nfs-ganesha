@@ -263,13 +263,13 @@ int construct_handle(struct glusterfs_export *glexport, const struct stat *sb,
 		return -1;
 	}
 
-	constructing->handle.attributes.mask =
+	constructing->handle->attrs.mask =
 		glexport->export.exp_ops.fs_supported_attrs(&glexport->export);
 
-	stat2fsal_attributes(sb, &constructing->handle.attributes);
+	stat2fsal_attributes(sb, &constructing->handle->attrs);
 
 	status = glusterfs_get_acl(glexport, glhandle, &buffxstat,
-				   &constructing->handle.attributes);
+				   &constructing->handle->attrs);
 
 	if (FSAL_IS_ERROR(status)) {
 		/* TODO: Is the error appropriate */
@@ -285,7 +285,7 @@ int construct_handle(struct glusterfs_export *glexport, const struct stat *sb,
 	constructing->glfd = NULL;
 
 	fsal_obj_handle_init(&constructing->handle, &glexport->export,
-			     constructing->handle.attributes.type);
+			     constructing->handle->attrs.type);
 	handle_ops_init(&constructing->handle.obj_ops);
 
 	*obj = constructing;

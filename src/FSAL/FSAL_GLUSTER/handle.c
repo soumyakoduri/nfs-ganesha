@@ -2337,7 +2337,69 @@ static fsal_status_t glusterfs_write2(struct fsal_obj_handle *obj_hdl,
 			    bool *fsal_stable,
 			    struct io_info *info)
 {
-	return fsalstat(ERR_FSAL_NOTSUPP, 0);
+        ssize_t nb_written;
+        fsal_status_t status;
+        int retval = 0;
+        struct glusterfs_fd my_fd = {0};
+        bool has_lock = false;
+        bool need_fsync = false;
+        bool closefd = false;
+        fsal_openflags_t openflags = FSAL_O_WRITE;
+
+        if (info != NULL) {
+                /* Currently we don't support WRITE_PLUS */
+                return fsalstat(ERR_FSAL_NOTSUPP, 0);
+        }
+
+        if (obj_hdl->fsal != obj_hdl->fs->fsal) {
+                LogDebug(COMPONENT_FSAL,
+                         "FSAL %s operation for handle belonging to FSAL %s, return EXDEV",
+                         obj_hdl->fsal->name, obj_hdl->fs->fsal->name);
+                return fsalstat(posix2fsal_error(EXDEV), EXDEV);
+        }
+
+        if (*fsal_stable)
+                openflags |= FSAL_O_SYNC;
+
+        /* Get a usable file descriptor */
+        status = find_fd(&my_fd, obj_hdl, bypass, state, openflags,
+                         &has_lock, &need_fsync, &closefd, false);
+
+        if (FSAL_IS_ERROR(status))
+                goto out;
+
+        fsal_set_credentials(op_ctx->creds);
+
+        nb_written = glfs_pwrite(my_fd.glfd, buffer, buffer_size, seek_descriptor,
+                                 ((*fsal_stable) ? O_SYNC : 0));
+
+        if (nb_written == -1) {
+                retval = errno;
+                status = fsalstat(posix2fsal_error(retval), retval);
+                goto out;
+        }
+
+        *write_amount = nb_written;
+
+        /* attempt stability if we aren't using an O_SYNC fd */
+        if (need_fsync) {
+                retval = glfs_fsync(my_fd.glfd);
+                if (retval == -1) {
+                        retval = errno;
+                        status = fsalstat(posix2fsal_error(retval), retval);
+                }
+        }
+
+ out:
+
+        if (closefd)
+                glusterfs_close_my_fd (&my_fd);
+
+        if (has_lock)
+                PTHREAD_RWLOCK_unlock(&obj_hdl->lock);
+
+        fsal_restore_ganesha_credentials();
+        return status;
 }
 
 /* commit2

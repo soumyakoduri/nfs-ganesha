@@ -2410,7 +2410,44 @@ static fsal_status_t glusterfs_commit2(struct fsal_obj_handle *obj_hdl,
 			     off_t offset,
 			     size_t len)
 {
-	return fsalstat(ERR_FSAL_NOTSUPP, 0);
+       fsal_status_t status;
+       int retval;
+       struct glusterfs_fd my_fd = {0};
+       bool has_lock = false;
+       bool closefd = false;
+
+        /* Make sure file is open in appropriate mode.
+         * Do not check share reservation.
+         */
+        status = glusterfs_reopen_obj(obj_hdl,
+                                false,
+                                false,
+                                FSAL_O_WRITE,
+                                &my_fd,
+                                &has_lock,
+                                &closefd);
+
+        if (!FSAL_IS_ERROR(status)) {
+
+                fsal_set_credentials(op_ctx->creds);
+
+                retval = glfs_fsync(my_fd.glfd);
+
+                if (retval == -1) {
+                        retval = errno;
+                        status = fsalstat(posix2fsal_error(retval), retval);
+                }
+
+                fsal_restore_ganesha_credentials();
+        }
+
+        if (closefd)
+                glusterfs_close_my_fd(&my_fd);
+
+        if (has_lock)
+                PTHREAD_RWLOCK_unlock(&obj_hdl->lock);
+
+        return status;
 }
 
 /* lock_op2

@@ -2608,6 +2608,128 @@ static fsal_status_t glusterfs_lock_op2(struct fsal_obj_handle *obj_hdl,
         return fsalstat(posix2fsal_error(retval), retval);
 }
 
+fsal_status_t fetch_attrs(struct glusterfs_handle *myself,
+                          struct glusterfs_fd *my_fd)
+{
+        struct stat stat;
+        int retval = 0;
+        fsal_status_t status = {0, 0};
+        const char *func = "unknown";
+
+        /* Now stat the file as appropriate */
+        switch (myself->handle.type) {
+        case SOCKET_FILE:
+        case CHARACTER_FILE:
+        case BLOCK_FILE:
+                /** TODO: handle this
+                retval = fstatat(my_fd, myself->u.unopenable.name, &stat,
+                                 AT_SYMLINK_NOFOLLOW);
+                func = "fstatat";
+                break;*/
+
+        case REGULAR_FILE:
+        case SYMBOLIC_LINK:
+        case FIFO_FILE:
+        case DIRECTORY:
+                retval = glfs_fstat(my_fd->glfd, &stat);
+                func = "fstat";
+                break;
+
+        case NO_FILE_TYPE:
+        case EXTENDED_ATTR:
+                /* Caught during open with EINVAL */
+                break;
+        }
+
+        if (retval < 0) {
+                if (errno == ENOENT)
+                        retval = ESTALE;
+                else
+                        retval = errno;
+
+                LogDebug(COMPONENT_FSAL, "%s failed with %s", func,
+                         strerror(retval));
+
+                return fsalstat(posix2fsal_error(retval), retval);
+        }
+
+        posix2fsal_attributes(&stat, &myself->attributes);
+        myself->attributes.fsid = myself->handle.fs->fsid;
+
+#ifdef sub_ops
+        if (myself->sub_ops && myself->sub_ops->getattrs) {
+                status = myself->sub_ops->getattrs(myself, my_fd,
+                                                   myself->attributes.mask);
+                if (FSAL_IS_ERROR(status)) {
+                        FSAL_CLEAR_MASK(myself->attributes.mask);
+                        FSAL_SET_MASK(myself->attributes.mask, ATTR_RDATTR_ERR);
+                }
+        }
+#endif
+        return status;
+}
+
+/* getattr2
+ */
+
+fsal_status_t glusterfs_getattr2(struct fsal_obj_handle *obj_hdl)
+{
+        struct glusterfs_handle *myself;
+        fsal_status_t status = {0, 0};
+        bool has_lock = false;
+        bool need_fsync = false;
+        bool closefd = false;
+        struct glusterfs_fd my_fd = {0};
+
+        myself = container_of(obj_hdl, struct glusterfs_handle, handle);
+
+        if (obj_hdl->fsal != obj_hdl->fs->fsal) {
+                LogDebug(COMPONENT_FSAL,
+                         "FSAL %s getattr for handle belonging to FSAL %s, ignoring",
+                         obj_hdl->fsal->name,
+                         obj_hdl->fs->fsal != NULL
+                                ? obj_hdl->fs->fsal->name
+                                : "(none)");
+                goto out;
+        }
+
+        /* Get a usable file descriptor (don't need to bypass - FSAL_O_ANY
+         * won't conflict with any share reservation).
+         */
+        status = find_fd(&my_fd, obj_hdl, false, NULL, FSAL_O_ANY,
+                         &has_lock, &need_fsync, &closefd, false);
+
+        if (FSAL_IS_ERROR(status)) {
+                if (obj_hdl->type == SYMBOLIC_LINK &&
+                    status.major == ERR_FSAL_PERM) {
+                        /* You cannot open_by_handle (XFS on linux) a symlink
+                         * and it throws an EPERM error for it.
+                         * open_by_handle_at does not throw that error for
+                         * symlinks so we play a game here.  Since there is
+                         * not much we can do with symlinks anyway,
+                         * say that we did it but don't actually
+                         * do anything.  In this case, return the stat we got
+                         * at lookup time.  If you *really* want to tweek things
+                         * like owners, get a modern linux kernel...
+                         */
+                        status = fsalstat(ERR_FSAL_NO_ERROR, 0);
+                }
+                goto out;
+        }
+
+        status = fetch_attrs(myself, &my_fd);
+
+ out:
+
+        if (closefd)
+                glusterfs_close_my_fd(&my_fd);
+
+        if (has_lock)
+                PTHREAD_RWLOCK_unlock(&obj_hdl->lock);
+
+        return status;
+}
+
 /* setattr2
  * default case not supported
  */

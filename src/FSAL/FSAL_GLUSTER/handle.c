@@ -1447,7 +1447,7 @@ fsal_status_t glusterfs_reopen_obj(struct fsal_obj_handle *obj_hdl,
 			     bool check_share,
 			     bool bypass,
 			     fsal_openflags_t openflags,
-			     struct glusterfs_fd *my_fd,
+			     struct glusterfs_fd *my_fd_arg,
 			     bool *has_lock,
 			     bool *closefd)
 {
@@ -1457,10 +1457,11 @@ fsal_status_t glusterfs_reopen_obj(struct fsal_obj_handle *obj_hdl,
 	int rc;
 	bool retried = false;
 	fsal_openflags_t try_openflags;
+        struct glusterfs_fd *my_fd = NULL;
 
 	/* Use the global file descriptor. */
 	myself = container_of(obj_hdl, struct glusterfs_handle, handle);
-	my_fd = &myself->globalfd;
+        my_fd = &myself->globalfd;
 	*closefd = false;
 
 	/* Take read lock on object to protect file descriptor.
@@ -1645,6 +1646,8 @@ again:
 
 //	*fd = my_fd->fd;
 	*has_lock = true;
+	my_fd_arg->glfd = my_fd->glfd;
+	my_fd_arg->openflags = my_fd->openflags;
 	return fsalstat(ERR_FSAL_NO_ERROR, 0);
 }
 
@@ -1661,7 +1664,7 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
         struct glusterfs_handle *myself;
         fsal_status_t status = {ERR_FSAL_NO_ERROR, 0};
         int rc=0, posix_flags;
-        struct glusterfs_fd  tmp_fd;
+        struct glusterfs_fd  tmp_fd = {0}, *tmp2_fd;
 
         myself = container_of(obj_hdl, struct glusterfs_handle, handle);
 
@@ -1692,13 +1695,16 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
                 status = glusterfs_open_my_fd (myself,
                                                openflags,
                                                posix_flags,
-                                               my_fd);
+                                               &tmp_fd);
                 if (FSAL_IS_ERROR(status)) {
                         LogDebug(COMPONENT_FSAL,
                                  "Failed with %s openflags 0x%08x",
                                  strerror(-rc), openflags) ;
                         return fsalstat(posix2fsal_error(errno), errno);
                 }
+
+                my_fd->glfd = tmp_fd.glfd;
+                my_fd->openflags = tmp_fd.openflags;
 
                 LogFullDebug(COMPONENT_FSAL,
                              "Opened glfd=%p for file of type %s",
@@ -1715,7 +1721,10 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
                 goto global;
 
         /* State was valid, check it's fd */
-        my_fd = (struct glusterfs_fd *)(state + 1);
+        tmp2_fd = (struct glusterfs_fd *)(state + 1);
+
+                my_fd->glfd = tmp2_fd->glfd;
+                my_fd->openflags = tmp2_fd->openflags;
 
         LogFullDebug(COMPONENT_FSAL,
                      "my_fd->openflags = %d openflags = %d",
@@ -1754,7 +1763,8 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
 
                 fsal2posix_openflags(openflags, &posix_flags);
 
-                status = glusterfs_open_my_fd(myself, openflags, posix_flags, my_fd);
+         //       my_fd = &tmp_fd;
+                status = glusterfs_open_my_fd(myself, openflags, posix_flags, &tmp_fd);
 
                 if (FSAL_IS_ERROR(status)) {
                         LogCrit(COMPONENT_FSAL,
@@ -1762,13 +1772,19 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
                 } else {
                         *need_fsync = false;
                 }
+                my_fd->glfd = tmp_fd.glfd;
+                my_fd->openflags = tmp_fd.openflags;
+
                 return status;
         }
 
         if ((state->state_type == STATE_TYPE_LOCK ||
              state->state_type == STATE_TYPE_NLM_LOCK) &&
             state->state_data.lock.openstate != NULL) {
-                my_fd = (struct glusterfs_fd *)(state->state_data.lock.openstate + 1);
+                tmp2_fd = (struct glusterfs_fd *)(state->state_data.lock.openstate + 1);
+
+                my_fd->glfd = tmp2_fd->glfd;
+                my_fd->openflags = tmp2_fd->openflags;
 
                 if (open_correct(my_fd, openflags)) {
                         /* It was valid, return it.
@@ -1797,9 +1813,13 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
          * temporary file descriptor. Check share reservation if not
          * opening FSAL_O_ANY.
          */
-        my_fd = &tmp_fd;
-        return glusterfs_reopen_obj(obj_hdl, openflags != FSAL_O_ANY, bypass,
+ //       my_fd = &tmp_fd;
+        status = glusterfs_reopen_obj(obj_hdl, openflags != FSAL_O_ANY, bypass,
                               openflags, &tmp_fd, has_lock, closefd);
+                my_fd->glfd = tmp_fd.glfd;
+                my_fd->openflags = tmp_fd.openflags;
+        return status;
+
 }
 
 /* open2
@@ -1820,7 +1840,7 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
 	struct glusterfs_export *glfs_export =
 	    container_of(op_ctx->fsal_export, struct glusterfs_export, export);
 	struct glusterfs_handle *myself, * parenthandle = NULL;
-        struct glusterfs_fd *my_fd = NULL;
+        struct glusterfs_fd *my_fd = NULL, tmp_fd = {0};
         struct stat sb;
         struct glfs_object *glhandle = NULL;
         unsigned char globjhdl[GFAPI_HANDLE_LENGTH] = {'\0'};
@@ -1874,12 +1894,13 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
                                       struct glusterfs_handle,
                                       handle);
 
+        /* XXX: fsid work
                 if (obj_hdl->fsal != obj_hdl->fs->fsal) {
                         LogDebug(COMPONENT_FSAL,
                                  "FSAL %s operation for handle belonging to FSAL %s, return EXDEV",
                                  obj_hdl->fsal->name, obj_hdl->fs->fsal->name);
                         return fsalstat(posix2fsal_error(EXDEV), EXDEV);
-                }
+                }*/
 
                 if (state != NULL) {
                         /* Prepare to take the share reservation, but only if we
@@ -1917,7 +1938,7 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
                 }
 
                 /* truncate is set in p_flags */
-                status = glusterfs_open_my_fd (myself, openflags, p_flags, my_fd);
+                status = glusterfs_open_my_fd (myself, openflags, p_flags, &tmp_fd);
         	
                 if (FSAL_IS_ERROR(status)) {
 	        	status = gluster2fsal_error(errno);
@@ -1933,6 +1954,9 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
                         }
         	}
 
+                my_fd->glfd = tmp_fd.glfd;
+                my_fd->openflags = tmp_fd.openflags;
+
 		if (createmode >= FSAL_EXCLUSIVE || truncated) {
 			/* Refresh the attributes to return client the attributes which got set */
 			struct stat stat;
@@ -1947,7 +1971,7 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
 				request_mask = myself->attributes.mask;
 				posix2fsal_attributes(&stat,
 						      &myself->attributes);
-				myself->attributes.fsid = obj_hdl->fs->fsid;
+//				myself->attributes.fsid = obj_hdl->fs->fsid;
 				if (myself->sub_ops &&
 				    myself->sub_ops->getattrs) {
 					status = myself->sub_ops->getattrs(
@@ -2089,7 +2113,7 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
 	        		 p_flags, unix_mode, &sb);
 	}
 
-        /* preserve errno */
+       /* preserve errno */
         retval = errno;
 
 	/* If we were creating, restore credentials now. */
@@ -2131,13 +2155,6 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
 	construct_handle(glfs_export, &sb, glhandle, globjhdl,
 			 GLAPI_HANDLE_LENGTH, &myself, vol_uuid);
 
-        /* now open it */
-        status = glusterfs_open_my_fd (myself, openflags, p_flags, my_fd);
-
-	if (FSAL_IS_ERROR(status)) {
-		goto direrr;
-	}
-
         /* If we didn't have a state above, use the global fd. At this point,
          * since we just created the global fd, no one else can have a
          * reference to it, and thus we can mamnipulate unlocked which is
@@ -2145,9 +2162,15 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
          * without a double locking deadlock.
          */
         if (my_fd == NULL) {
-                myself->globalfd.glfd = my_fd->glfd;
-                myself->globalfd.openflags = my_fd->openflags;
+                my_fd = &myself->globalfd;
         }
+
+        /* now open it */
+        status = glusterfs_open_my_fd (myself, openflags, p_flags, my_fd);
+
+	if (FSAL_IS_ERROR(status)) {
+		goto direrr;
+	}
 
         *new_obj = &myself->handle;
 
@@ -2254,12 +2277,13 @@ static fsal_status_t glusterfs_reopen2(struct fsal_obj_handle *obj_hdl,
                                struct glusterfs_handle,
                                handle);
 
+        /* XXX: fsid work
         if (obj_hdl->fsal != obj_hdl->fs->fsal) {
                 LogDebug(COMPONENT_FSAL,
                          "FSAL %s operation for handle belonging to FSAL %s, return EXDEV",
                          obj_hdl->fsal->name, obj_hdl->fs->fsal->name);
                 return fsalstat(posix2fsal_error(EXDEV), EXDEV);
-        }
+        }*/
 
         /* This can block over an I/O operation. */
         PTHREAD_RWLOCK_wrlock(&obj_hdl->lock);
@@ -2302,7 +2326,7 @@ static fsal_status_t glusterfs_reopen2(struct fsal_obj_handle *obj_hdl,
  //                               request_mask = myself->attributes.mask;
                                 posix2fsal_attributes(&stat,
                                                       &myself->attributes);
-                                myself->attributes.fsid = obj_hdl->fs->fsid;
+//                                myself->attributes.fsid = obj_hdl->fs->fsid;
 #ifdef sub_ops
                                 if (myself->sub_ops &&
                                     myself->sub_ops->getattrs) {
@@ -2374,12 +2398,13 @@ static fsal_status_t glusterfs_read2(struct fsal_obj_handle *obj_hdl,
 
         myself = container_of(obj_hdl, struct glusterfs_handle, handle);
 
+        /* XXX: fsid work
         if (obj_hdl->fsal != obj_hdl->fs->fsal) {
                 LogDebug(COMPONENT_FSAL,
                          "FSAL %s operation for handle belonging to FSAL %s, return EXDEV",
                          obj_hdl->fsal->name, obj_hdl->fs->fsal->name);
                 return fsalstat(posix2fsal_error(EXDEV), EXDEV);
-        }
+        }*/
 
         /* Get a usable file descriptor */
         status = find_fd(&my_fd, obj_hdl, bypass, state, FSAL_O_READ,
@@ -2458,12 +2483,13 @@ static fsal_status_t glusterfs_write2(struct fsal_obj_handle *obj_hdl,
                 return fsalstat(ERR_FSAL_NOTSUPP, 0);
         }
 
+        /* XXX: fsid work
         if (obj_hdl->fsal != obj_hdl->fs->fsal) {
                 LogDebug(COMPONENT_FSAL,
                          "FSAL %s operation for handle belonging to FSAL %s, return EXDEV",
                          obj_hdl->fsal->name, obj_hdl->fs->fsal->name);
                 return fsalstat(posix2fsal_error(EXDEV), EXDEV);
-        }
+        }*/
 
         if (*fsal_stable)
                 openflags |= FSAL_O_SYNC;
@@ -2579,12 +2605,13 @@ static fsal_status_t glusterfs_lock_op2(struct fsal_obj_handle *obj_hdl,
         bool bypass = false;
         fsal_openflags_t openflags = FSAL_O_RDWR;
 
+        /* XXX: fsid work
         if (obj_hdl->fsal != obj_hdl->fs->fsal) {
                 LogDebug(COMPONENT_FSAL,
                          "FSAL %s operation for handle belonging to FSAL %s, return EXDEV",
                          obj_hdl->fsal->name, obj_hdl->fs->fsal->name);
                 return fsalstat(posix2fsal_error(EXDEV), EXDEV);
-        }
+        }*/
 
         LogFullDebug(COMPONENT_FSAL,
                      "Locking: op:%d type:%d start:%" PRIu64 " length:%lu ",
@@ -2761,7 +2788,7 @@ fsal_status_t fetch_attrs(struct glusterfs_handle *myself,
         }
 
         posix2fsal_attributes(&stat, &myself->attributes);
-        myself->attributes.fsid = myself->handle.fs->fsid;
+//        myself->attributes.fsid = myself->handle.fs->fsid;
 
 #ifdef sub_ops
         if (myself->sub_ops && myself->sub_ops->getattrs) {
@@ -2790,6 +2817,7 @@ fsal_status_t glusterfs_getattr2(struct fsal_obj_handle *obj_hdl)
 
         myself = container_of(obj_hdl, struct glusterfs_handle, handle);
 
+        /* XXX: fsid work
         if (obj_hdl->fsal != obj_hdl->fs->fsal) {
                 LogDebug(COMPONENT_FSAL,
                          "FSAL %s getattr for handle belonging to FSAL %s, ignoring",
@@ -2798,7 +2826,7 @@ fsal_status_t glusterfs_getattr2(struct fsal_obj_handle *obj_hdl)
                                 ? obj_hdl->fs->fsal->name
                                 : "(none)");
                 goto out;
-        }
+        }*/
 
         /* Get a usable file descriptor (don't need to bypass - FSAL_O_ANY
          * won't conflict with any share reservation).
@@ -2877,6 +2905,7 @@ static fsal_status_t glusterfs_setattr2(struct fsal_obj_handle *obj_hdl,
 
         myself = container_of(obj_hdl, struct glusterfs_handle, handle);
 
+        /* XXX: fsid work
         if (obj_hdl->fsal != obj_hdl->fs->fsal) {
                 LogDebug(COMPONENT_FSAL,
                          "FSAL %s operation for handle belonging to FSAL %s, return EXDEV",
@@ -2885,12 +2914,12 @@ static fsal_status_t glusterfs_setattr2(struct fsal_obj_handle *obj_hdl,
                                 ? obj_hdl->fs->fsal->name
                                 : "(none)");
                 return fsalstat(posix2fsal_error(EXDEV), EXDEV);
-        }
+        }*/
         if (NFSv4_ACL_SUPPORT) {
                 if (FSAL_TEST_MASK(attrib_set->mask, ATTR_ACL)) {
                         if (obj_hdl->type == DIRECTORY)
                                 buffxstat.is_dir = true;
-                        else 
+                        else
                                 buffxstat.is_dir = false;
 
                         FSAL_SET_MASK(attr_valid, XATTR_ACL);
@@ -3065,11 +3094,13 @@ static fsal_status_t glusterfs_setattr2(struct fsal_obj_handle *obj_hdl,
                         retval = vfs_utimesat(my_fd, myself->u.unopenable.name,
                                               timebuf, AT_SYMLINK_NOFOLLOW);
                 else */
+                /* XXX: brick server threw function not implemented error..probably
+                 * not supported for ext*/
                         retval = glfs_futimens(my_fd.glfd, timebuf);
-                if (retval != 0) {
+/*                if (retval != 0) {
                         func = "utimes";
                         goto fileerr;
-                }
+                }*/
         }
 
 #ifdef sub_ops

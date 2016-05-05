@@ -1303,6 +1303,11 @@ static fsal_status_t file_close(struct fsal_obj_handle *obj_hdl)
 	now(&s_time);
 #endif
 
+	if (!objhandle->globalfd.openflags ||
+            (objhandle->globalfd.openflags & FSAL_O_CLOSED)) {
+                return status;
+        }
+
 	rc = glfs_close(objhandle->globalfd.glfd);
 	if (rc != 0) {
 		status = gluster2fsal_error(errno);
@@ -1343,8 +1348,8 @@ fsal_status_t glusterfs_open_my_fd(struct glusterfs_handle *objhandle,
         assert(my_fd->glfd == NULL
                && my_fd->openflags == FSAL_O_CLOSED && openflags != 0);
 
-	if (objhandle->globalfd.openflags != FSAL_O_CLOSED)
-		return fsalstat(ERR_FSAL_SERVERFAULT, 0);
+//	if (objhandle->globalfd.openflags != FSAL_O_CLOSED)
+//		return fsalstat(ERR_FSAL_SERVERFAULT, 0);
 
 	fsal2posix_openflags(openflags, &p_flags);
 
@@ -1697,7 +1702,7 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
                                                posix_flags,
                                                &tmp_fd);
                 if (FSAL_IS_ERROR(status)) {
-                        LogDebug(COMPONENT_FSAL,
+                        LogCrit(COMPONENT_FSAL,
                                  "Failed with %s openflags 0x%08x",
                                  strerror(-rc), openflags) ;
                         return fsalstat(posix2fsal_error(errno), errno);
@@ -2730,6 +2735,7 @@ static fsal_status_t glusterfs_lock_op2(struct fsal_obj_handle *obj_hdl,
                 return status;
         }
 
+        /* XXX: setlkowner as well */ 
         errno = 0;
         retval = glfs_posix_lock(my_fd.glfd, fcntl_comm, &lock_args);
 

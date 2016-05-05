@@ -2792,10 +2792,14 @@ static fsal_status_t glusterfs_lock_op2(struct fsal_obj_handle *obj_hdl,
 fsal_status_t fetch_attrs(struct glusterfs_handle *myself,
                           struct glusterfs_fd *my_fd)
 {
-        struct stat stat;
         int retval = 0;
         fsal_status_t status = {0, 0};
         const char *func = "unknown";
+        glusterfs_fsal_xstat_t buffxstat;
+        struct attrlist *fsalattr;
+        struct glusterfs_export *glfs_export =
+            container_of(op_ctx->fsal_export, struct glusterfs_export, export);
+
 
         /* Now stat the file as appropriate */
         switch (myself->handle.type) {
@@ -2812,7 +2816,7 @@ fsal_status_t fetch_attrs(struct glusterfs_handle *myself,
         case SYMBOLIC_LINK:
         case FIFO_FILE:
         case DIRECTORY:
-                retval = glfs_fstat(my_fd->glfd, &stat);
+                retval = glfs_fstat(my_fd->glfd, &buffxstat.buffstat);
                 func = "fstat";
                 break;
 
@@ -2831,22 +2835,35 @@ fsal_status_t fetch_attrs(struct glusterfs_handle *myself,
                 LogDebug(COMPONENT_FSAL, "%s failed with %s", func,
                          strerror(retval));
 
-                return fsalstat(posix2fsal_error(retval), retval);
+                status = gluster2fsal_error(retval);
+                goto out;
         }
 
-        posix2fsal_attributes(&stat, &myself->attributes);
+        fsalattr = &myself->attributes;
+        stat2fsal_attributes(&buffxstat.buffstat, &myself->attributes);
 //        myself->attributes.fsid = myself->handle.fs->fsid;
 
-#ifdef sub_ops
-        if (myself->sub_ops && myself->sub_ops->getattrs) {
-                status = myself->sub_ops->getattrs(myself, my_fd,
-                                                   myself->attributes.mask);
+        if (myself->handle.type == DIRECTORY)
+                buffxstat.is_dir = true;
+        else
+                buffxstat.is_dir = false;
+
+        status = glusterfs_get_acl(glfs_export, myself->glhandle,
+                                   &buffxstat, fsalattr);
+
+        /*
+         * The error ENOENT is not an expected error for GETATTRS.
+         * Due to this, operations such as RENAME will fail when it
+         * calls GETATTRS on removed file.
+         */
+        if (status.minor == ENOENT)
+                status = gluster2fsal_error(ESTALE);
+
+out:
                 if (FSAL_IS_ERROR(status)) {
                         FSAL_CLEAR_MASK(myself->attributes.mask);
                         FSAL_SET_MASK(myself->attributes.mask, ATTR_RDATTR_ERR);
                 }
-        }
-#endif
         return status;
 }
 

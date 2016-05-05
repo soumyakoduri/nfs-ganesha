@@ -2939,12 +2939,14 @@ static fsal_status_t glusterfs_setattr2(struct fsal_obj_handle *obj_hdl,
         bool need_fsync = false;
         bool closefd = false;
         struct glusterfs_fd my_fd={0};
-        const char *func;
         struct glusterfs_export *glfs_export =
             container_of(op_ctx->fsal_export, struct glusterfs_export, export);
         glusterfs_fsal_xstat_t buffxstat;
         int attr_valid = 0;
+        int mask = 0;
 
+
+        /* XXX: Handle special file symblic links etc */
         /* apply umask, if mode attribute is to be changed */
         if (FSAL_TEST_MASK(attrib_set->mask, ATTR_MODE))
                 attrib_set->mode &=
@@ -2962,44 +2964,6 @@ static fsal_status_t glusterfs_setattr2(struct fsal_obj_handle *obj_hdl,
                                 : "(none)");
                 return fsalstat(posix2fsal_error(EXDEV), EXDEV);
         }*/
-        if (NFSv4_ACL_SUPPORT) {
-                if (FSAL_TEST_MASK(attrib_set->mask, ATTR_ACL)) {
-                        if (obj_hdl->type == DIRECTORY)
-                                buffxstat.is_dir = true;
-                        else
-                                buffxstat.is_dir = false;
-
-                        FSAL_SET_MASK(attr_valid, XATTR_ACL);
-                        status =
-                          glusterfs_process_acl(glfs_export->gl_fs,
-                                                myself->glhandle,
-                                                attrib_set, &buffxstat);
-
-                        if (FSAL_IS_ERROR(status))
-                                goto out;
-                        /* setting the ACL will set the */
-                        /* mode-bits too if not already passed */
-                                retval = glfs_fchmod(
-                                        my_fd.glfd,
-                                        fsal2unix_mode(attrib_set->mode));
-                }
-        } else if (FSAL_TEST_MASK(attrib_set->mask, ATTR_ACL)) {
-                status = fsalstat(ERR_FSAL_ATTRNOTSUPP, 0);
-                goto out;
-        }
-
-        /* This is yet another "you can't get there from here".  If this object
-         * is a socket (AF_UNIX), an fd on the socket s useless _period_.
-         * If it is for a symlink, without O_PATH, you will get an ELOOP error
-         * and (f)chmod doesn't work for a symlink anyway - not that it matters
-         * because access checking is not done on the symlink but the final
-         * target.
-         * AF_UNIX sockets are also ozone material.  If the socket is already
-         * active listeners et al, you can manipulate the mode etc.  If it is
-         * just sitting there as in you made it with a mknod.
-         * (one of those leaky abstractions...)
-         * or the listener forgot to unlink it, it is lame duck.
-         */
 
         /* Test if size is being set, make sure file is regular and if so,
          * require a read/write file descriptor.
@@ -3017,19 +2981,6 @@ static fsal_status_t glusterfs_setattr2(struct fsal_obj_handle *obj_hdl,
                          &has_lock, &need_fsync, &closefd, false);
 
         if (FSAL_IS_ERROR(status)) {
-                if (obj_hdl->type == SYMBOLIC_LINK &&
-                    status.major == ERR_FSAL_PERM) {
-                        /* You cannot open_by_handle (XFS) a symlink and it
-                         * throws an EPERM error for it.  open_by_handle_at
-                         * does not throw that error for symlinks so we play a
-                         * game here.  Since there is not much we can do with
-                         * symlinks anyway, say that we did it
-                         * but don't actually do anything.
-                         * If you *really* want to tweek things
-                         * like owners, get a modern linux kernel...
-                         */
-                        status = fsalstat(ERR_FSAL_NO_ERROR, 0);
-                }
                 goto out;
         }
 
@@ -3037,130 +2988,116 @@ static fsal_status_t glusterfs_setattr2(struct fsal_obj_handle *obj_hdl,
         if (FSAL_TEST_MASK(attrib_set->mask, ATTR_SIZE)) {
                 retval = glfs_ftruncate (my_fd.glfd, attrib_set->filesize);
                 if (retval != 0) {
-                        /** @todo FSF: is this still necessary?
-                         *
-                         * XXX ESXi volume creation pattern reliably
-                         * reached this point in the past, however now that we
-                         * only use the already open file descriptor if it is
-                         * open read/write, this may no longer fail.
-                         * If there is some other error from ftruncate, then
-                         * we will needlessly retry, but without more detail
-                         * of the original failure, we can't be sure.
-                         * Fortunately permission checking is done by
-                         * Ganesha before calling here, so we won't get an
-                         * EACCES since this call is done as root. We could
-                         * get EFBIG, EPERM, or EINVAL.
-                         */
-                        /** @todo FSF: re-open if we really still need this
-                         */
-
-                        retval = glfs_ftruncate(my_fd.glfd, attrib_set->filesize);
                         if (retval != 0) {
-                                func = "truncate";
-                                goto fileerr;
+                                status = gluster2fsal_error(errno);
+                                goto out;
                         }
                 }
         }
 
-        /** CHMOD **/
         if (FSAL_TEST_MASK(attrib_set->mask, ATTR_MODE)) {
-                /* The POSIX chmod call doesn't affect the symlink object, but
-                 * the entry it points to. So we must ignore it.
-                 */
-                if (obj_hdl->type != SYMBOLIC_LINK) {
-                        /* XXX: Have special checks for socket file etc
-                        if (vfs_unopenable_type(obj_hdl->type))
-                                retval = fchmodat(
-                                        my_fd,
-                                        myself->u.unopenable.name,
-                                        fsal2unix_mode(attrib_set->mode),
-                                        0);
-                        else */
-                                retval = glfs_fchmod(
-                                        my_fd.glfd,
-                                        fsal2unix_mode(attrib_set->mode));
-
-                        if (retval != 0) {
-                                func = "chmod";
-                                goto fileerr;
-                        }
-                }
+                FSAL_SET_MASK(mask, GLAPI_SET_ATTR_MODE);
+                buffxstat.buffstat.st_mode = fsal2unix_mode(attrib_set->mode);
         }
 
-        /**  CHOWN  **/
-        if (FSAL_TEST_MASK(attrib_set->mask, ATTR_OWNER | ATTR_GROUP)) {
-                uid_t user = FSAL_TEST_MASK(attrib_set->mask, ATTR_OWNER)
-                    ? (int)attrib_set->owner : -1;
-                gid_t group = FSAL_TEST_MASK(attrib_set->mask, ATTR_GROUP)
-                    ? (int)attrib_set->group : -1;
-
-                        /* XXX: Have special checks for socket file etc
-                if (vfs_unopenable_type(obj_hdl->type))
-                        retval = fchownat(my_fd, myself->u.unopenable.name,
-                                          user, group, AT_SYMLINK_NOFOLLOW);
-                else if (obj_hdl->type == SYMBOLIC_LINK)
-                        retval = fchownat(my_fd, "", user, group,
-                                          AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH);
-                else*/
-                        retval = glfs_fchown(my_fd.glfd, user, group);
-                if (retval) {
-                        func = "chown";
-                        goto fileerr;
-                }
+        if (FSAL_TEST_MASK(attrib_set->mask, ATTR_OWNER)) {
+                FSAL_SET_MASK(mask, GLAPI_SET_ATTR_UID);
+                buffxstat.buffstat.st_uid = attrib_set->owner;
         }
 
-        /**  UTIME  **/
-        if (FSAL_TEST_MASK(attrib_set->mask, ATTRS_SET_TIME)) {
-                struct timespec timebuf[2];
-
-                if (obj_hdl->type == SYMBOLIC_LINK)
-                        goto out; /* Setting time on symlinks is illegal */
-                /* Atime */
-                if (FSAL_TEST_MASK(attrib_set->mask, ATTR_ATIME_SERVER)) {
-                        timebuf[0].tv_sec = 0;
-                        timebuf[0].tv_nsec = UTIME_NOW;
-                } else if (FSAL_TEST_MASK(attrib_set->mask, ATTR_ATIME)) {
-                        timebuf[0] = attrib_set->atime;
-                } else {
-                        timebuf[0].tv_sec = 0;
-                        timebuf[0].tv_nsec = UTIME_OMIT;
-                }
-
-                /* Mtime */
-                if (FSAL_TEST_MASK(attrib_set->mask, ATTR_MTIME_SERVER)) {
-                        timebuf[1].tv_sec = 0;
-                        timebuf[1].tv_nsec = UTIME_NOW;
-                } else if (FSAL_TEST_MASK(attrib_set->mask, ATTR_MTIME)) {
-                        timebuf[1] = attrib_set->mtime;
-                } else {
-                        timebuf[1].tv_sec = 0;
-                        timebuf[1].tv_nsec = UTIME_OMIT;
-                }
-                        /* XXX: Have special checks for socket file etc
-                if (vfs_unopenable_type(obj_hdl->type))
-                        retval = vfs_utimesat(my_fd, myself->u.unopenable.name,
-                                              timebuf, AT_SYMLINK_NOFOLLOW);
-                else */
-                /* XXX: brick server threw function not implemented error..probably
-                 * not supported for ext*/
-                        retval = glfs_futimens(my_fd.glfd, timebuf);
-/*                if (retval != 0) {
-                        func = "utimes";
-                        goto fileerr;
-                }*/
+        if (FSAL_TEST_MASK(attrib_set->mask, ATTR_GROUP)) {
+                FSAL_SET_MASK(mask, GLAPI_SET_ATTR_GID);
+                buffxstat.buffstat.st_gid = attrib_set->group;
         }
 
-#ifdef sub_ops
-        /** SUBFSAL **/
-        if (myself->sub_ops && myself->sub_ops->setattrs) {
-                status = myself->sub_ops->setattrs(
-                                        myself,
-                                        my_fd,
-                                        attrib_set->mask, attrib_set);
-                if (FSAL_IS_ERROR(status))
+        if (FSAL_TEST_MASK(attrib_set->mask, ATTR_ATIME)) {
+                FSAL_SET_MASK(mask, GLAPI_SET_ATTR_ATIME);
+                buffxstat.buffstat.st_atim = attrib_set->atime;
+        }
+
+        if (FSAL_TEST_MASK(attrib_set->mask, ATTR_ATIME_SERVER)) {
+                FSAL_SET_MASK(mask, GLAPI_SET_ATTR_ATIME);
+                struct timespec timestamp;
+
+                retval = clock_gettime(CLOCK_REALTIME, &timestamp);
+                if (retval != 0) {
+                        status = gluster2fsal_error(errno);
                         goto out;
+                }
+                buffxstat.buffstat.st_atim = timestamp;
         }
-#endif
+
+        /* try to look at glfs_futimens() instead as done in vfs */
+        if (FSAL_TEST_MASK(attrib_set->mask, ATTR_MTIME)) {
+                FSAL_SET_MASK(mask, GLAPI_SET_ATTR_MTIME);
+                buffxstat.buffstat.st_mtim = attrib_set->mtime;
+        }
+        if (FSAL_TEST_MASK(attrib_set->mask, ATTR_MTIME_SERVER)) {
+                FSAL_SET_MASK(mask, GLAPI_SET_ATTR_MTIME);
+                struct timespec timestamp;
+
+                retval = clock_gettime(CLOCK_REALTIME, &timestamp);
+                if (retval != 0) {
+                        status = gluster2fsal_error(retval);
+                        goto out;
+                }
+                buffxstat.buffstat.st_mtim = timestamp;
+        }
+
+        /* TODO: Check for attributes not supported and return */
+        /* EATTRNOTSUPP error.  */
+
+        if (NFSv4_ACL_SUPPORT) {
+                if (FSAL_TEST_MASK(attrib_set->mask, ATTR_ACL)) {
+                        if (obj_hdl->type == DIRECTORY)
+                                buffxstat.is_dir = true;
+                        else
+                                buffxstat.is_dir = false;
+
+                        FSAL_SET_MASK(attr_valid, XATTR_ACL);
+                        status =
+                          glusterfs_process_acl(glfs_export->gl_fs,
+                                                myself->glhandle,
+                                                attrib_set, &buffxstat);
+
+                        if (FSAL_IS_ERROR(status))
+                                goto out;
+                        /* setting the ACL will set the */
+                        /* mode-bits too if not already passed */
+                        FSAL_SET_MASK(mask, GLAPI_SET_ATTR_MODE);
+                }
+        } else if (FSAL_TEST_MASK(attrib_set->mask, ATTR_ACL)) {
+                status = fsalstat(ERR_FSAL_ATTRNOTSUPP, 0);
+                goto out;
+        }
+
+        /* If any stat changed, indicate that */
+        if (mask != 0)
+                FSAL_SET_MASK(attr_valid, XATTR_STAT);
+        if (FSAL_TEST_MASK(attr_valid, XATTR_STAT)) {
+                /*Only if there is any change in attrs send them down to fs */
+                /* XXX: instead use glfs_fsetattr().... looks like there is
+                 * fix needed in there..it doesn't convert the mask flags 
+                 * to corresponding gluster flags. */
+                retval = glfs_h_setattrs(glfs_export->gl_fs,
+                                     myself->glhandle,
+                                     &buffxstat.buffstat,
+                                     mask);
+                if (retval != 0) {
+                        status = gluster2fsal_error(errno);
+                        goto out;
+                }
+        }
+
+        if (FSAL_TEST_MASK(attr_valid, XATTR_ACL))
+                status = glusterfs_set_acl(glfs_export, myself, &buffxstat);
+
+        if (FSAL_IS_ERROR(status)) {
+                LogDebug(COMPONENT_FSAL,
+                         "setting ACL failed");
+                goto out;
+        }
+
         status = fetch_attrs(myself, &my_fd);
 
         if (FSAL_IS_ERROR(status)) {
@@ -3171,19 +3108,16 @@ static fsal_status_t glusterfs_setattr2(struct fsal_obj_handle *obj_hdl,
 
         errno = 0;
 
- fileerr:
-
+ out:
         retval = errno;
 
         if (retval != 0) {
                 LogDebug(COMPONENT_FSAL,
-                         "%s returned %s",
-                         func, strerror(retval));
+                         "setattrs failed with error %s",
+                         strerror(retval));
         }
 
         status = fsalstat(posix2fsal_error(retval), retval);
-
- out:
 
         if (closefd)
                 glusterfs_close_my_fd (&my_fd);

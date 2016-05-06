@@ -1668,8 +1668,10 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
 {
         struct glusterfs_handle *myself;
         fsal_status_t status = {ERR_FSAL_NO_ERROR, 0};
-        int rc=0, posix_flags;
+        int posix_flags;
         struct glusterfs_fd  tmp_fd = {0}, *tmp2_fd;
+	struct glusterfs_export *glfs_export =
+	    container_of(op_ctx->fsal_export, struct glusterfs_export, export);
 
         myself = container_of(obj_hdl, struct glusterfs_handle, handle);
 
@@ -1694,8 +1696,6 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
                 posix_flags |= O_NONBLOCK;
                 /* fall through */
 
-        case DIRECTORY:
-                /* XXX: Shall we do opendir() here? */
  regular_open:
                 status = glusterfs_open_my_fd (myself,
                                                openflags,
@@ -1704,7 +1704,7 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
                 if (FSAL_IS_ERROR(status)) {
                         LogCrit(COMPONENT_FSAL,
                                  "Failed with %s openflags 0x%08x",
-                                 strerror(-rc), openflags) ;
+                                 strerror(errno), openflags) ;
                         return fsalstat(posix2fsal_error(errno), errno);
                 }
 
@@ -1717,6 +1717,15 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
 
                 *closefd = true;
                 return status;
+        case DIRECTORY:
+                /* XXX: Shall we do opendir() here? */
+                my_fd->glfd = glfs_h_opendir (glfs_export->gl_fs,
+                                                myself->glhandle);
+                if (my_fd->glfd == NULL)
+                        return gluster2fsal_error(errno);
+                *closefd = true;
+                return status;
+
         case NO_FILE_TYPE:
         case EXTENDED_ATTR:
                 return fsalstat(posix2fsal_error(EINVAL), EINVAL);
@@ -2812,15 +2821,13 @@ fsal_status_t fetch_attrs(struct glusterfs_handle *myself,
         case SOCKET_FILE:
         case CHARACTER_FILE:
         case BLOCK_FILE:
-                /** TODO: handle this
-                retval = fstatat(my_fd, myself->u.unopenable.name, &stat,
-                                 AT_SYMLINK_NOFOLLOW);
-                func = "fstatat";
-                break;*/
-
-        case REGULAR_FILE:
-        case SYMBOLIC_LINK:
+        case SYMBOLIC_LINK: /* XXX: do we need glfd? */
         case FIFO_FILE:
+                retval = glfs_h_stat(glfs_export->gl_fs, myself->glhandle,
+                                        &buffxstat.buffstat);
+                func = "stat";
+                break;
+        case REGULAR_FILE:
         case DIRECTORY:
                 retval = glfs_fstat(my_fd->glfd, &buffxstat.buffstat);
                 func = "fstat";
@@ -2998,17 +3005,20 @@ static fsal_status_t glusterfs_setattr2(struct fsal_obj_handle *obj_hdl,
         }
 
         /* Get a usable file descriptor. Share conflict is only possible if
-         * size is being set.
+         * size is being set. For special files, handle via handle.
          */
-        status = find_fd(&my_fd, obj_hdl, bypass, state, openflags,
-                         &has_lock, &need_fsync, &closefd, false);
+        if ((obj_hdl->type == REGULAR_FILE) || (obj_hdl->type == DIRECTORY)){
+                status = find_fd(&my_fd, obj_hdl, bypass, state, openflags,
+                                 &has_lock, &need_fsync, &closefd, false);
 
-        if (FSAL_IS_ERROR(status)) {
-                goto out;
+                if (FSAL_IS_ERROR(status)) {
+                        goto out;
+                }
         }
 
         /** TRUNCATE **/
-        if (FSAL_TEST_MASK(attrib_set->mask, ATTR_SIZE)) {
+        if (FSAL_TEST_MASK(attrib_set->mask, ATTR_SIZE) &&
+            (obj_hdl->type != REGULAR_FILE)) {
                 retval = glfs_ftruncate (my_fd.glfd, attrib_set->filesize);
                 if (retval != 0) {
                         if (retval != 0) {

@@ -1836,6 +1836,82 @@ fsal_status_t find_fd(struct glusterfs_fd *my_fd,
 
 }
 
+fsal_status_t fetch_attrs(struct glusterfs_handle *myself,
+                          struct glusterfs_fd *my_fd)
+{
+        int retval = 0;
+        fsal_status_t status = {0, 0};
+        const char *func = "unknown";
+        glusterfs_fsal_xstat_t buffxstat;
+        struct attrlist *fsalattr;
+        struct glusterfs_export *glfs_export =
+            container_of(op_ctx->fsal_export, struct glusterfs_export, export);
+
+
+        /* Now stat the file as appropriate */
+        switch (myself->handle.type) {
+        case SOCKET_FILE:
+        case CHARACTER_FILE:
+        case BLOCK_FILE:
+        case SYMBOLIC_LINK: /* XXX: do we need glfd? */
+        case FIFO_FILE:
+                retval = glfs_h_stat(glfs_export->gl_fs, myself->glhandle,
+                                        &buffxstat.buffstat);
+                func = "stat";
+                break;
+        case REGULAR_FILE:
+        case DIRECTORY:
+                retval = glfs_fstat(my_fd->glfd, &buffxstat.buffstat);
+                func = "fstat";
+                break;
+
+        case NO_FILE_TYPE:
+        case EXTENDED_ATTR:
+                /* Caught during open with EINVAL */
+                break;
+        }
+
+        if (retval < 0) {
+                if (errno == ENOENT)
+                        retval = ESTALE;
+                else
+                        retval = errno;
+
+                LogDebug(COMPONENT_FSAL, "%s failed with %s", func,
+                         strerror(retval));
+
+                status = gluster2fsal_error(retval);
+                goto out;
+        }
+
+        fsalattr = &myself->attributes;
+        stat2fsal_attributes(&buffxstat.buffstat, &myself->attributes);
+//        myself->attributes.fsid = myself->handle.fs->fsid;
+
+        if (myself->handle.type == DIRECTORY)
+                buffxstat.is_dir = true;
+        else
+                buffxstat.is_dir = false;
+
+        status = glusterfs_get_acl(glfs_export, myself->glhandle,
+                                   &buffxstat, fsalattr);
+
+        /*
+         * The error ENOENT is not an expected error for GETATTRS.
+         * Due to this, operations such as RENAME will fail when it
+         * calls GETATTRS on removed file.
+         */
+        if (status.minor == ENOENT)
+                status = gluster2fsal_error(ESTALE);
+
+out:
+                if (FSAL_IS_ERROR(status)) {
+                        FSAL_CLEAR_MASK(myself->attributes.mask);
+                        FSAL_SET_MASK(myself->attributes.mask, ATTR_RDATTR_ERR);
+                }
+        return status;
+}
+
 /* open2
  */
 
@@ -1974,45 +2050,18 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
 
 		if (createmode >= FSAL_EXCLUSIVE || truncated) {
 			/* Refresh the attributes to return client the attributes which got set */
-			struct stat stat;
-#ifdef SUB_OPS
-			attrmask_t request_mask;
-#endif
+			status = fetch_attrs (myself, my_fd);
 
-			retval = glfs_fstat(my_fd->glfd, &stat);
-
-			if (retval == 0) {
-#ifdef SUB_OPS
-				request_mask = myself->attributes.mask;
-				posix2fsal_attributes(&stat,
-						      &myself->attributes);
-//				myself->attributes.fsid = obj_hdl->fs->fsid;
-				if (myself->sub_ops &&
-				    myself->sub_ops->getattrs) {
-					status = myself->sub_ops->getattrs(
-							myself, my_fd->glfd,
-							request_mask);
-					if (FSAL_IS_ERROR(status)) {
-						FSAL_CLEAR_MASK(
-						    myself->attributes.mask);
-						FSAL_SET_MASK(
-						    myself->attributes.mask,
-						    ATTR_RDATTR_ERR);
-						/** @todo: should handle this
-						 * better.
-						 */
-					}
-				}
-#endif
-				LogFullDebug(COMPONENT_FSAL,
-					     "New size = %"PRIx64,
-					     myself->attributes.filesize);
-			} else {
-				if (errno == EBADF)
-					errno = ESTALE;
-				status = fsalstat(posix2fsal_error(errno),
-						  errno);
+			if (FSAL_IS_ERROR(status)) {
+				FSAL_CLEAR_MASK( myself->attributes.mask);
+				FSAL_SET_MASK( myself->attributes.mask,
+					       ATTR_RDATTR_ERR);
+				/** @todo: should handle this
+				 * better.
+				 */
 			}
+			LogFullDebug(COMPONENT_FSAL, "New size = %"PRIx64,
+				     myself->attributes.filesize);
 
 			/* Now check verifier for exclusive, but not for
 			 * FSAL_EXCLUSIVE_9P.
@@ -2207,7 +2256,6 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
 		 * Note that we only set the attributes if we were responsible
 		 * for creating the file.
 		 */
-#ifdef SETATTR2 
 		status = (*new_obj)->obj_ops.setattr2(*new_obj,
 						      false,
 						      state,
@@ -2219,7 +2267,6 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
 			*new_obj = NULL;
 			goto fileerr;
 		}
-#endif
 	}
 
 
@@ -2242,11 +2289,11 @@ static fsal_status_t glusterfs_open2(struct fsal_obj_handle *obj_hdl,
 
 	return fsalstat(ERR_FSAL_NO_ERROR, 0);
 
-// fileerr:
 
- direrr:
+fileerr:
 	glusterfs_close_my_fd (my_fd);
 
+direrr:
 	/* Delete the file if we actually created it. */
 	if (created)
 		glfs_h_unlink(glfs_export->gl_fs, parenthandle->glhandle, name);
@@ -2341,40 +2388,14 @@ static fsal_status_t glusterfs_reopen2(struct fsal_obj_handle *obj_hdl,
 
                 if (truncated) {
                         /* Refresh the attributes */
-                        struct stat stat;
-//                        attrmask_t request_mask;
-                        int retval;
-
-                        retval = glfs_fstat(my_share_fd->glfd, &stat);
-
-                        if (retval == 0) {
- //                               request_mask = myself->attributes.mask;
-                                posix2fsal_attributes(&stat,
-                                                      &myself->attributes);
-//                                myself->attributes.fsid = obj_hdl->fs->fsid;
-#ifdef sub_ops
-                                if (myself->sub_ops &&
-                                    myself->sub_ops->getattrs) {
-                                        status = myself->sub_ops->getattrs(
-                                                        myself, my_share_fd->fd,
-                                                        request_mask);
-                                        if (FSAL_IS_ERROR(status)) {
-                                                FSAL_CLEAR_MASK(
-                                                    myself->attributes.mask);
-                                                FSAL_SET_MASK(
-                                                    myself->attributes.mask,
-                                                    ATTR_RDATTR_ERR);
-                                                /** @todo: should handle this
-                                                 * better.
-                                                 */
-                                        }
-                                }
-#endif
-                        } else {
-                                if (errno == EBADF)
-                                        errno = ESTALE;
-                                status = fsalstat(posix2fsal_error(errno),
-                                                  errno);
+                        status = fetch_attrs (myself, my_share_fd); 
+                        if (FSAL_IS_ERROR(status)) {
+                                FSAL_CLEAR_MASK( myself->attributes.mask);
+                                FSAL_SET_MASK( myself->attributes.mask,
+                                               ATTR_RDATTR_ERR);
+                                 /** @todo: should handle this
+                                   * better.
+                                   */
                         }
                 }
         } else {
@@ -2407,7 +2428,7 @@ static fsal_status_t glusterfs_read2(struct fsal_obj_handle *obj_hdl,
 			   bool *end_of_file,
 			   struct io_info *info)
 {
-        struct glusterfs_handle *myself;
+//        struct glusterfs_handle *myself;
         struct glusterfs_fd my_fd = {0};
         ssize_t nb_read;
         fsal_status_t status;
@@ -2421,7 +2442,7 @@ static fsal_status_t glusterfs_read2(struct fsal_obj_handle *obj_hdl,
                 return fsalstat(ERR_FSAL_NOTSUPP, 0);
         }
 
-        myself = container_of(obj_hdl, struct glusterfs_handle, handle);
+ //       myself = container_of(obj_hdl, struct glusterfs_handle, handle);
 
         /* XXX: fsid work
         if (obj_hdl->fsal != obj_hdl->fs->fsal) {
@@ -2449,9 +2470,11 @@ static fsal_status_t glusterfs_read2(struct fsal_obj_handle *obj_hdl,
         *read_amount = nb_read;
 
         /* dual eof condition */
-        *end_of_file = ((nb_read == 0) /* most clients */ ||    /* ESXi */
-                        (((seek_descriptor + nb_read) >= myself->attributes.filesize)));
+//        *end_of_file = ((nb_read == 0) /* most clients */ ||    /* ESXi */
+//                        (((seek_descriptor + nb_read) >= myself->attributes.filesize)));
 
+        if (nb_read < buffer_size)
+                *end_of_file = true;
 #if 0
         /** @todo
          *
@@ -2804,82 +2827,6 @@ static fsal_status_t glusterfs_lock_op2(struct fsal_obj_handle *obj_hdl,
         return fsalstat(posix2fsal_error(retval), retval);
 }
 
-fsal_status_t fetch_attrs(struct glusterfs_handle *myself,
-                          struct glusterfs_fd *my_fd)
-{
-        int retval = 0;
-        fsal_status_t status = {0, 0};
-        const char *func = "unknown";
-        glusterfs_fsal_xstat_t buffxstat;
-        struct attrlist *fsalattr;
-        struct glusterfs_export *glfs_export =
-            container_of(op_ctx->fsal_export, struct glusterfs_export, export);
-
-
-        /* Now stat the file as appropriate */
-        switch (myself->handle.type) {
-        case SOCKET_FILE:
-        case CHARACTER_FILE:
-        case BLOCK_FILE:
-        case SYMBOLIC_LINK: /* XXX: do we need glfd? */
-        case FIFO_FILE:
-                retval = glfs_h_stat(glfs_export->gl_fs, myself->glhandle,
-                                        &buffxstat.buffstat);
-                func = "stat";
-                break;
-        case REGULAR_FILE:
-        case DIRECTORY:
-                retval = glfs_fstat(my_fd->glfd, &buffxstat.buffstat);
-                func = "fstat";
-                break;
-
-        case NO_FILE_TYPE:
-        case EXTENDED_ATTR:
-                /* Caught during open with EINVAL */
-                break;
-        }
-
-        if (retval < 0) {
-                if (errno == ENOENT)
-                        retval = ESTALE;
-                else
-                        retval = errno;
-
-                LogDebug(COMPONENT_FSAL, "%s failed with %s", func,
-                         strerror(retval));
-
-                status = gluster2fsal_error(retval);
-                goto out;
-        }
-
-        fsalattr = &myself->attributes;
-        stat2fsal_attributes(&buffxstat.buffstat, &myself->attributes);
-//        myself->attributes.fsid = myself->handle.fs->fsid;
-
-        if (myself->handle.type == DIRECTORY)
-                buffxstat.is_dir = true;
-        else
-                buffxstat.is_dir = false;
-
-        status = glusterfs_get_acl(glfs_export, myself->glhandle,
-                                   &buffxstat, fsalattr);
-
-        /*
-         * The error ENOENT is not an expected error for GETATTRS.
-         * Due to this, operations such as RENAME will fail when it
-         * calls GETATTRS on removed file.
-         */
-        if (status.minor == ENOENT)
-                status = gluster2fsal_error(ESTALE);
-
-out:
-                if (FSAL_IS_ERROR(status)) {
-                        FSAL_CLEAR_MASK(myself->attributes.mask);
-                        FSAL_SET_MASK(myself->attributes.mask, ATTR_RDATTR_ERR);
-                }
-        return status;
-}
-
 /* getattr2
  */
 
@@ -3018,7 +2965,7 @@ static fsal_status_t glusterfs_setattr2(struct fsal_obj_handle *obj_hdl,
 
         /** TRUNCATE **/
         if (FSAL_TEST_MASK(attrib_set->mask, ATTR_SIZE) &&
-            (obj_hdl->type != REGULAR_FILE)) {
+            (obj_hdl->type == REGULAR_FILE)) {
                 retval = glfs_ftruncate (my_fd.glfd, attrib_set->filesize);
                 if (retval != 0) {
                         if (retval != 0) {

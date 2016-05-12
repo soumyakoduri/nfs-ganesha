@@ -322,27 +322,27 @@ static fsal_status_t get_dynamic_info(struct fsal_export *exp_hdl,
  */
 
 struct state_t *glusterfs_alloc_state(struct fsal_export *exp_hdl,
-                                enum state_type state_type,
-                                struct state_t *related_state)
+				enum state_type state_type,
+				struct state_t *related_state)
 {
-        struct state_t *state;
-        size_t extra = sizeof(struct glusterfs_fd);
-        struct glusterfs_fd *my_fd;
+	struct state_t *state;
+	size_t extra = sizeof(struct glusterfs_fd);
+	struct glusterfs_fd *my_fd;
 
-        state = gsh_calloc(1, sizeof(struct state_t) + extra);
+	state = gsh_calloc(1, sizeof(struct state_t) + extra);
 
-        my_fd = (struct glusterfs_fd *)(state + 1);
+	my_fd = (struct glusterfs_fd *)(state + 1);
 
-        state->state_exp = exp_hdl;
-        state->state_type = state_type;
+	state->state_exp = exp_hdl;
+	state->state_type = state_type;
 
-        if (state_type == STATE_TYPE_LOCK ||
-            state_type == STATE_TYPE_NLM_LOCK)
-                state->state_data.lock.openstate = related_state;
+	if (state_type == STATE_TYPE_LOCK ||
+	    state_type == STATE_TYPE_NLM_LOCK)
+		state->state_data.lock.openstate = related_state;
 
-        my_fd->glfd = NULL;
+	my_fd->glfd = NULL;
 
-        return state;
+	return state;
 }
 
 /** @todo: We have gone POSIX way for the APIs below, can consider the CEPH way
@@ -561,7 +561,7 @@ void export_ops_init(struct export_ops *ops)
 	ops->fs_supported_attrs = fs_supported_attrs;
 	ops->fs_umask = fs_umask;
 	ops->fs_xattr_access_rights = fs_xattr_access_rights;
-        ops->alloc_state = glusterfs_alloc_state;
+	ops->alloc_state = glusterfs_alloc_state;
 }
 
 struct glexport_params {

@@ -71,7 +71,7 @@ static struct fsal_staticfsinfo_t default_gluster_info = {
 	.pnfs_mds = false,
 	.pnfs_ds = true,
 	.link_supports_permission_checks = true,
-        .lock_support_owner = true,
+	.lock_support_owner = true,
 };
 
 static struct glusterfs_fsal_module *glfsal_module;
@@ -129,7 +129,7 @@ static fsal_status_t init_config(struct fsal_module *fsal_hdl,
 
 bool glusterfs_support_ex(void)
 {
-        return true;
+	return true;
 }
 
 /* Module methods
@@ -153,8 +153,8 @@ MODULE_INIT void glusterfs_init(void)
 	/* setup global handle internals */
 	glfsal_module->fsal.m_ops.init_config = init_config;
 
-        /* Enable extended fop support */
-        glfsal_module->fsal.m_ops.support_ex = glusterfs_support_ex;
+	/* Enable extended fop support */
+	glfsal_module->fsal.m_ops.support_ex = glusterfs_support_ex;
 	/*
 	 * Following inits needed for pNFS support
 	 * get device info will used by pnfs meta data server

@@ -146,11 +146,11 @@ struct glusterfs_export {
 };
 
 struct glusterfs_fd {
-        /** The open and share mode etc. */
-        fsal_openflags_t openflags;
+	/** The open and share mode etc. */
+	fsal_openflags_t openflags;
 
-        /** Gluster file descriptor. */
-        struct glfs_fd *glfd;
+	/** Gluster file descriptor. */
+	struct glfs_fd *glfd;
 };
 
 struct glusterfs_handle {
@@ -158,10 +158,10 @@ struct glusterfs_handle {
 	unsigned char globjhdl[GLAPI_HANDLE_LENGTH];	/* handle descriptor,
 							   for wire handle */
 
-        struct glusterfs_fd globalfd;
+	struct glusterfs_fd globalfd;
 	struct fsal_obj_handle handle;	/* public FSAL handle */
 	struct attrlist attributes; /* Attributes of this Object. */
-        struct fsal_share share; /* share_reservations */
+	struct fsal_share share; /* share_reservations */
 
 	/* following added for pNFS support */
 	uint64_t rd_issued;

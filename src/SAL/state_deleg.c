@@ -74,6 +74,14 @@ bool state_open_deleg_conflict(struct state_hdl *ostate,
 
 	assert(open_state->state_type == STATE_TYPE_SHARE);
 
+	LogWarn(COMPONENT_STATE,
+		     "obj %p: share counter: access_read %u, access_write %u, deny_read %u, deny_write %u, deny_write_v4 %u",
+		     ostate->file.obj,
+		     ostate->file.share_state.share_access_read,
+		     ostate->file.share_state.share_access_write,
+		     ostate->file.share_state.share_deny_read,
+		     ostate->file.share_state.share_deny_write,
+		     ostate->file.share_state.share_deny_write_v4);
 	switch (share->share_access & OPEN4_SHARE_ACCESS_BOTH) {
 	case OPEN4_SHARE_ACCESS_BOTH:
 		/* We would be granting a write delegation. If this is
@@ -105,10 +113,6 @@ bool state_open_deleg_conflict(struct state_hdl *ostate,
 		break;
 	}
 
-		if (ostate->file.share_state.share_access_read == 0 &&
-		    ostate->file.share_state.share_access_write == 0) {
-			return false;
-		}
 	return true;
 }
 

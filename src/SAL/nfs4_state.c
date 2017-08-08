@@ -204,6 +204,17 @@ state_status_t _state_add_impl(struct fsal_obj_handle *obj,
 	glist_add_tail(&ostate->file.list_of_states, &pnew_state->state_list);
 	/* Get ref for this state entry */
 	obj->obj_ops.get_ref(obj);
+
+	/* FIXME: check on RECLAIM field */
+	/* FIXME: Also look state_share_upgrade */
+	status = state_share_add(obj, owner_input, pnew_state, false);
+	if (status != STATE_SUCCESS) {
+		LogEvent(COMPONENT_STATE,
+			 "failed to add state_share: status=%s",
+			 msg_fsal_err(status));
+	}
+
+
 	PTHREAD_MUTEX_unlock(&pnew_state->state_mutex);
 
 #ifdef USE_LTTNG

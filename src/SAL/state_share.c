@@ -550,7 +550,7 @@ static void state_share_update_counter(struct state_hdl *hstate, int
 	if (v4)
 		hstate->file.share_state.share_deny_write_v4 += deny_write_inc;
 
-	LogFullDebug(COMPONENT_STATE,
+	LogWarn(COMPONENT_STATE,
 		     "obj %p: share counter: access_read %u, access_write %u, deny_read %u, deny_write %u, deny_write_v4 %u",
 		     hstate->file.obj,
 		     hstate->file.share_state.share_access_read,

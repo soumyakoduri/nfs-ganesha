@@ -206,9 +206,11 @@ bool fs_specific_has(const char *fs_specific, const char *key, char *val,
 
 void setglustercreds(struct glusterfs_export *glfs_export, uid_t *uid,
 		     gid_t *gid, unsigned int ngrps, gid_t *groups,
+		     char *client_addr, unsigned int client_addr_len,
 		     char *file, int line, char *function)
 {
 	int rc = 0;
+	char lease_id[GLFS_LEASE_ID_SIZE];
 
 	if (uid) {
 		if (*uid != glfs_export->saveduid)
@@ -233,12 +235,18 @@ void setglustercreds(struct glusterfs_export *glfs_export, uid_t *uid,
 	else
 		rc = glfs_setfsgroups(0, NULL);
 
+	if ((client_addr_len <= GLFS_LEASE_ID_SIZE) && client_addr) {
+		memcpy(lease_id, client_addr, client_addr_len);
+		rc = glfs_setfsleaseid(lease_id);
+	} else
+		rc = glfs_setfsleaseid(NULL);
  out:
 	if (rc != 0) {
 		DisplayLogComponentLevel(COMPONENT_FSAL, file, line, function,
 			 NIV_FATAL,
 			"Could not set Gluster credentials - uid(%d), gid(%d)",
-			*uid, *gid);
+			uid ? *uid : glfs_export->saveduid,
+			gid ? *gid : glfs_export->savedgid);
 	}
 }
 
